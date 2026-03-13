@@ -1,0 +1,16 @@
+services:
+  dealmaster:
+    build: .
+    restart: unless-stopped
+    environment:
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - CATEGORIES=${CATEGORIES:-}
+      - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-120}
+      - MIN_VOTES=${MIN_VOTES:-0}
+      - MAX_SEEN_DEALS=${MAX_SEEN_DEALS:-500}
+      - DISCORD_USERNAME=${DISCORD_USERNAME:-OzBargain Deals}
+    volumes:
+      - dealmaster-data:/data
+
+volumes:
+  dealmaster-data:
