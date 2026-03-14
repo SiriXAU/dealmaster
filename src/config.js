@@ -24,7 +24,7 @@ export function loadConfig() {
 
   const minVotes = parseInt(process.env.MIN_VOTES ?? '0', 10);
   const maxSeenDeals = parseInt(process.env.MAX_SEEN_DEALS ?? '500', 10);
-  const discordUsername = process.env.DISCORD_USERNAME ?? 'OzBargain Deals';
+  const discordUsername = process.env.DISCORD_USERNAME ?? 'Dealmaster';
   const dataDir = process.env.DATA_DIR ?? '/data';
 
   return Object.freeze({
