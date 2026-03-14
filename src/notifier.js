@@ -65,7 +65,7 @@ function buildEmbed(deal, brand) {
 
   const embed = {
     title,
-    url: deal.link,
+    ...(deal.link ? { url: deal.link } : {}),
     description,
     color: brand.color,
     fields,
