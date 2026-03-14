@@ -20,8 +20,6 @@ Dealmaster monitors [OzBargain](https://www.ozbargain.com.au/deals) for new deal
 
 ## Quick Start
 
-### Using the pre-built image (recommended)
-
 No clone required. Create two files in a new directory and you're done.
 
 **`docker-compose.yml`**
@@ -55,21 +53,9 @@ volumes:
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN
 ```
 
-Then:
+Then start it:
 ```bash
 podman-compose up -d        # or: docker compose up -d
-podman logs dealmaster_dealmaster_1
-```
-
-### Building from source
-
-```bash
-git clone https://github.com/SiriXAU/dealmaster
-cd dealmaster
-cp .env.example .env
-# Edit .env and set DISCORD_WEBHOOK_URL
-
-podman-compose up -d --build
 ```
 
 On first start, Dealmaster posts the most recent OzBargain deal to your Discord channel so you know it's live, then begins watching for new ones.
@@ -141,12 +127,14 @@ Seen deal IDs are stored in `$DATA_DIR/seen-deals.json` (default: `/data/seen-de
 
 The store is capped at `MAX_SEEN_DEALS` entries (default: `500`). When the cap is reached, the oldest entries are trimmed. With a 2-minute poll interval and typical OzBargain posting volume this is more than enough to prevent duplicates indefinitely.
 
-**Resetting state** (to replay all current deals):
+**Resetting state** (to re-notify on all current deals):
 ```bash
 podman-compose down
-podman volume rm dealmaster_dealmaster-data
+podman volume rm <project-directory>_dealmaster-data
 podman-compose up -d
 ```
+
+> The volume name is prefixed with the name of the directory containing your `docker-compose.yml`. For example, if your directory is `~/dealmaster`, the volume will be named `dealmaster_dealmaster-data`.
 
 ---
 
@@ -155,42 +143,14 @@ podman-compose up -d
 After startup and after every poll cycle, Dealmaster writes a timestamp to `/tmp/health` inside the container. The health check defined in `docker-compose.yml` verifies that file has been updated within the last 10 minutes. If the poll loop stalls or crashes, the container will be marked unhealthy.
 
 ```bash
-# Check current health status
-podman inspect --format='{{.State.Health.Status}}' dealmaster_dealmaster_1
+# Check health status (replace <container-name> with the actual container name)
+podman inspect --format='{{.State.Health.Status}}' <container-name>
+
+# List running containers to find the name
+podman ps
 ```
 
 Possible statuses: `starting` (within the 30s start period), `healthy`, `unhealthy`.
-
----
-
-## Publishing the Image
-
-### Manual publish to GitHub Container Registry
-
-```bash
-# Authenticate (once)
-podman login ghcr.io -u YOUR_GITHUB_USERNAME
-
-# Build in Docker format (required for HEALTHCHECK support if baking it into the image)
-podman build --format docker -t ghcr.io/sirixau/dealmaster:latest .
-
-# Tag a versioned release
-podman tag ghcr.io/sirixau/dealmaster:latest ghcr.io/sirixau/dealmaster:1.0.0
-
-# Push
-podman push ghcr.io/sirixau/dealmaster:latest
-podman push ghcr.io/sirixau/dealmaster:1.0.0
-```
-
-Make the package public in **GitHub → Packages → dealmaster → Package settings → Change visibility**.
-
-### Automated publish via GitHub Actions
-
-A workflow is included at `.github/workflows/publish.yml` that automatically builds and pushes to GHCR on every push to `main`. No secrets configuration is needed — it uses the built-in `GITHUB_TOKEN`.
-
-### Using the published image
-
-See the [Quick Start](#quick-start) section for the ready-to-use `docker-compose.yml`. The image is published to `ghcr.io/sirixau/dealmaster:latest` on every push to `main`.
 
 ---
 
@@ -253,10 +213,7 @@ dealmaster/
 │   └── store.js          # Seen-deal ID persistence (JSON on disk)
 ├── Dockerfile            # node:22-alpine image
 ├── docker-compose.yml    # Compose definition with healthcheck
-├── .env.example          # Environment variable template
-└── .github/
-    └── workflows/
-        └── publish.yml   # Automated GHCR publish on push to main
+└── .env.example          # Environment variable template
 ```
 
 ---
