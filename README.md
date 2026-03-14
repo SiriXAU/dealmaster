@@ -28,7 +28,7 @@ No clone required. Create two files in a new directory and you're done.
 ```yaml
 services:
   dealmaster:
-    image: ghcr.io/siriaxu/dealmaster:latest
+    image: ghcr.io/sirixau/dealmaster:latest
     restart: unless-stopped
     environment:
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
@@ -172,14 +172,14 @@ Possible statuses: `starting` (within the 30s start period), `healthy`, `unhealt
 podman login ghcr.io -u YOUR_GITHUB_USERNAME
 
 # Build in Docker format (required for HEALTHCHECK support if baking it into the image)
-podman build --format docker -t ghcr.io/siriaxu/dealmaster:latest .
+podman build --format docker -t ghcr.io/sirixau/dealmaster:latest .
 
 # Tag a versioned release
-podman tag ghcr.io/siriaxu/dealmaster:latest ghcr.io/siriaxu/dealmaster:1.0.0
+podman tag ghcr.io/sirixau/dealmaster:latest ghcr.io/sirixau/dealmaster:1.0.0
 
 # Push
-podman push ghcr.io/siriaxu/dealmaster:latest
-podman push ghcr.io/siriaxu/dealmaster:1.0.0
+podman push ghcr.io/sirixau/dealmaster:latest
+podman push ghcr.io/sirixau/dealmaster:1.0.0
 ```
 
 Make the package public in **GitHub → Packages → dealmaster → Package settings → Change visibility**.
@@ -190,7 +190,7 @@ A workflow is included at `.github/workflows/publish.yml` that automatically bui
 
 ### Using the published image
 
-See the [Quick Start](#quick-start) section for the ready-to-use `docker-compose.yml`. The image is published to `ghcr.io/siriaxu/dealmaster:latest` on every push to `main`.
+See the [Quick Start](#quick-start) section for the ready-to-use `docker-compose.yml`. The image is published to `ghcr.io/sirixau/dealmaster:latest` on every push to `main`.
 
 ---
 
