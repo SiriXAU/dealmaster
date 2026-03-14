@@ -1,17 +1,17 @@
 # Dealmaster
 
-> **Personal project notice:** Dealmaster was vibe-coded for personal use. It scratches a specific itch — getting OzBargain deal notifications directly in a Discord channel without relying on third-party bots or services. It works well for that purpose and is shared here in case it's useful to others, but comes with no guarantees, SLAs, or formal support. Use at your own risk and feel free to fork and adapt it.
+> **Personal project notice:** Dealmaster was vibe-coded for personal use. It scratches a specific itch — getting OzBargain deal notifications directly in a notification service without relying on third-party bots or services. It works well for that purpose and is shared here in case it's useful to others, but comes with no guarantees, SLAs, or formal support. Use at your own risk and feel free to fork and adapt it.
 
-Dealmaster monitors [OzBargain](https://www.ozbargain.com.au/deals) for new deals and posts rich Discord embed notifications via webhook. It runs as a self-contained container configured entirely via environment variables, with no database or external dependencies beyond the OzBargain RSS feed.
+Dealmaster monitors [OzBargain](https://www.ozbargain.com.au/deals) for new deals and sends notifications via [Apprise](https://github.com/caronc/apprise), supporting 100+ services (Discord, Slack, Telegram, email, and more). It runs as a self-contained container configured entirely via environment variables, with no database or external dependencies beyond the OzBargain RSS feed.
 
 ---
 
 ## Features
 
 - Polls the OzBargain RSS feed on a configurable interval
-- Posts rich Discord embeds with title, description, category, vote count, author, thumbnail, and timestamp
+- Sends notifications via Apprise to any supported service (Discord, Slack, Telegram, email, and more)
 - Category and minimum-vote filtering to reduce noise
-- Startup heartbeat — posts the most recent deal on launch so you know the bot is live
+- Startup heartbeat — sends a notification for the most recent deal on launch so you know it's live
 - Persistent seen-deal tracking to prevent duplicate notifications across restarts
 - Graceful shutdown on `SIGTERM`/`SIGINT` (plays well with `podman-compose down`)
 - Container health check via a polled timestamp file
@@ -29,12 +29,11 @@ services:
     image: ghcr.io/sirixau/dealmaster:latest
     restart: unless-stopped
     environment:
-      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - APPRISE_URLS=${APPRISE_URLS}
       - CATEGORIES=${CATEGORIES:-}
       - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-120}
       - MIN_VOTES=${MIN_VOTES:-0}
       - MAX_SEEN_DEALS=${MAX_SEEN_DEALS:-500}
-      - DISCORD_USERNAME=${DISCORD_USERNAME:-Dealmaster}
     healthcheck:
       test: ["CMD", "node", "-e", "try{const s=require('fs').statSync('/tmp/health');if(Date.now()-s.mtimeMs>600000)process.exit(1);}catch(e){process.exit(1);}"]
       interval: 60s
@@ -50,7 +49,7 @@ volumes:
 
 **`.env`**
 ```
-DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN
+APPRISE_URLS=discord://YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN
 ```
 
 Then start it:
@@ -58,7 +57,7 @@ Then start it:
 podman-compose up -d        # or: docker compose up -d
 ```
 
-On first start, Dealmaster posts the most recent OzBargain deal to your Discord channel so you know it's live, then begins watching for new ones.
+On first start, Dealmaster sends a notification for the most recent OzBargain deal so you know it's live, then begins watching for new ones.
 
 ---
 
@@ -66,21 +65,36 @@ On first start, Dealmaster posts the most recent OzBargain deal to your Discord 
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `DISCORD_WEBHOOK_URL` | **Yes** | — | Full Discord webhook URL |
+| `APPRISE_URLS` | **Yes** | — | Comma-separated list of Apprise notification URLs |
 | `CATEGORIES` | No | _(all)_ | Comma-separated category filter (see below) |
 | `POLL_INTERVAL_SECONDS` | No | `120` | Seconds between feed checks — minimum `30` |
 | `MIN_VOTES` | No | `0` | Minimum OzBargain vote count required to notify |
 | `MAX_SEEN_DEALS` | No | `500` | Maximum deal IDs to retain in the persistence store |
-| `DISCORD_USERNAME` | No | `Dealmaster` | Display name shown in Discord for the webhook bot |
 | `DATA_DIR` | No | `/data` | Path for the persistence file inside the container |
 
-### Getting a Discord webhook URL
+### Configuring Apprise URLs
 
-1. Open your Discord server → **Server Settings** → **Integrations** → **Webhooks**
-2. Click **New Webhook**, choose a channel, and copy the URL
-3. Paste it as `DISCORD_WEBHOOK_URL` in your `.env` file
+`APPRISE_URLS` accepts one or more [Apprise](https://github.com/caronc/apprise)-format URLs, comma-separated. Apprise supports 100+ notification services.
 
-> **Security note:** Treat your webhook URL as a secret. Anyone with it can post to your channel. Keep it out of version control — `.env` is in `.gitignore` for this reason.
+| Service | Apprise URL format |
+|---------|-------------------|
+| Discord | `discord://webhook_id/webhook_token` |
+| Slack | `slack://TokenA/TokenB/TokenC/Channel` |
+| Telegram | `tgram://bottoken/ChatID` |
+| Email (Gmail) | `mailto://user:pass@gmail.com` |
+| Pushover | `pover://user@token` |
+| Gotify | `gotify://hostname/token` |
+
+> **Discord tip:** The webhook URL `https://discord.com/api/webhooks/1234/abcd` maps to `discord://1234/abcd`.
+
+See the [Apprise wiki](https://github.com/caronc/apprise/wiki) for all supported services and URL formats.
+
+**Multiple services example:**
+```
+APPRISE_URLS=discord://id/token,slack://TokenA/TokenB/TokenC/Channel
+```
+
+> **Security note:** Treat your notification URLs as secrets — they grant posting access to your channels. Keep them out of version control — `.env` is in `.gitignore` for this reason.
 
 ---
 
@@ -101,7 +115,7 @@ Leave `CATEGORIES` empty (the default) to receive all categories.
 
 **Example `.env` for computing and gaming deals only:**
 ```
-DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+APPRISE_URLS=discord://YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN
 CATEGORIES=Computing,Gaming
 MIN_VOTES=5
 ```
@@ -113,11 +127,11 @@ MIN_VOTES=5
 On every start Dealmaster:
 
 1. Fetches the current OzBargain feed
-2. Posts the single most recent (filtered) deal to Discord as a liveness signal
+2. Sends a notification for the single most recent (filtered) deal as a liveness signal
 3. Marks all current feed items as seen
 4. Enters the regular poll loop
 
-This means you always get at least one message in Discord on startup confirming the bot is running, and the first real poll will only notify on deals that appear *after* that point.
+This means you always receive a startup notification confirming the tool is running, and the first real poll will only notify on deals that appear *after* that point.
 
 ---
 
@@ -172,8 +186,8 @@ Possible statuses: `starting` (within the 30s start period), `healthy`, `unhealt
        │                                │
 ┌──────▼───────┐               ┌────────▼──────────────┐
 │  fetcher.js  │               │     notifier.js        │
-│  OzBargain   │               │  buildEmbed()          │
-│  RSS → deals │               │  sendDealNotification()│
+│  OzBargain   │               │  Apprise CLI           │
+│  RSS → deals │               │  notification sender   │
 └──────────────┘               └────────────────────────┘
        │
 ┌──────▼───────┐
@@ -190,11 +204,11 @@ Possible statuses: `starting` (within the 30s start period), `healthy`, `unhealt
 ```
 
 1. `index.js` loads and validates configuration from environment variables, registers `SIGTERM`/`SIGINT` handlers, and calls `startMonitor()`
-2. On startup, `monitor.js` fetches the current feed, posts the most recent deal to Discord, marks everything as seen, then enters the poll loop
+2. On startup, `monitor.js` fetches the current feed, sends a startup notification, marks everything as seen, then enters the poll loop
 3. On each poll, `fetcher.js` fetches and parses the OzBargain RSS feed, normalising each item into a consistent deal shape
 4. `filter.js` applies the category whitelist and minimum vote threshold
 5. `store.js` loads the persisted set of seen deal IDs and filters out already-seen deals
-6. `notifier.js` builds a Discord embed and POSTs it to the webhook URL for each new deal
+6. `notifier.js` calls the Apprise CLI to send a notification to all configured URLs for each new deal
 7. Updated seen IDs are written back to disk and `/tmp/health` is touched
 
 ---
@@ -209,9 +223,9 @@ dealmaster/
 │   ├── fetcher.js        # OzBargain RSS fetch and normalisation
 │   ├── filter.js         # Category and vote filtering
 │   ├── monitor.js        # Poll loop, startup heartbeat, health file
-│   ├── notifier.js       # Discord embed construction and webhook POST
+│   ├── notifier.js       # Apprise CLI notification sender
 │   └── store.js          # Seen-deal ID persistence (JSON on disk)
-├── Dockerfile            # node:22-alpine image
+├── Dockerfile            # node:22-alpine image with Python3 + apprise
 ├── docker-compose.yml    # Compose definition with healthcheck
 └── .env.example          # Environment variable template
 ```
@@ -221,7 +235,7 @@ dealmaster/
 ## Requirements
 
 - **Runtime:** Docker or Podman with Compose support (`docker compose` / `podman-compose`)
-- **Discord:** A server where you have permission to create webhooks
-- **Network:** Outbound HTTPS to `www.ozbargain.com.au` and `discord.com`
+- **Notifications:** An Apprise-compatible notification service (Discord, Slack, Telegram, email, etc.)
+- **Network:** Outbound HTTPS to `www.ozbargain.com.au` and your notification service endpoint(s)
 
 No accounts, API keys, or external services beyond the above are required.

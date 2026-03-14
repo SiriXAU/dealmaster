@@ -2,11 +2,17 @@
  * Loads and validates configuration from environment variables.
  */
 export function loadConfig() {
-  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
-  if (!webhookUrl) {
-    console.error('ERROR: DISCORD_WEBHOOK_URL environment variable is required.');
-    console.error('Set it to your Discord webhook URL, e.g.:');
-    console.error('  docker run -e DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..." dealmaster');
+  const rawAppriseUrls = process.env.APPRISE_URLS ?? '';
+  const appriseUrls = rawAppriseUrls
+    .split(',')
+    .map(u => u.trim())
+    .filter(u => u.length > 0);
+
+  if (appriseUrls.length === 0) {
+    console.error('ERROR: APPRISE_URLS environment variable is required.');
+    console.error('Set it to one or more Apprise notification URLs (comma-separated), e.g.:');
+    console.error('  docker run -e APPRISE_URLS="discord://YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN" dealmaster');
+    console.error('  See https://github.com/caronc/apprise/wiki for all supported services.');
     process.exit(1);
   }
 
@@ -24,16 +30,14 @@ export function loadConfig() {
 
   const minVotes = parseInt(process.env.MIN_VOTES ?? '0', 10);
   const maxSeenDeals = parseInt(process.env.MAX_SEEN_DEALS ?? '500', 10);
-  const discordUsername = process.env.DISCORD_USERNAME ?? 'Dealmaster';
   const dataDir = process.env.DATA_DIR ?? '/data';
 
   return Object.freeze({
-    webhookUrl,
+    appriseUrls,
     categories,
     pollIntervalMs: pollIntervalSeconds * 1000,
     minVotes: isNaN(minVotes) ? 0 : minVotes,
     maxSeenDeals: isNaN(maxSeenDeals) ? 500 : maxSeenDeals,
-    discordUsername,
     dataDir,
   });
 }

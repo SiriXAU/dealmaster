@@ -1,75 +1,61 @@
-const BRAND = {
-  color: 0xFF6600,
-  iconUrl: 'https://www.ozbargain.com.au/sites/all/themes/ozbargain/logo-sm.png',
-  footerText: 'OzBargain',
-};
+import { execFile } from 'child_process';
 
 /**
- * Sends a Discord webhook notification for a single deal.
+ * Sends a notification for a single deal via the Apprise CLI.
  *
  * @param {Object} deal - Normalized deal object
- * @param {Object} config - App config (webhookUrl, discordUsername)
+ * @param {Object} config - App config (appriseUrls)
  * @returns {Promise<boolean>} true on success
  */
 export async function sendDealNotification(deal, config) {
-  const embed = buildEmbed(deal);
-  const payload = {
-    username: config.discordUsername,
-    avatar_url: BRAND.iconUrl,
-    embeds: [embed],
-  };
-
-  try {
-    const res = await fetch(config.webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      console.error(`[notifier] Discord returned ${res.status}: ${body}`);
-      console.error(`[notifier] Payload was: ${JSON.stringify(payload)}`);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.error(`[notifier] Failed to send notification: ${err.message}`);
-    return false;
-  }
+  const title = buildTitle(deal);
+  const body = buildBody(deal);
+  return runApprise(title, body, config.appriseUrls);
 }
 
 /**
- * Builds a Discord embed object for the given deal.
+ * Builds a notification title for the given deal.
  */
-function buildEmbed(deal) {
-  const title = truncate(deal.title, 256);
+function buildTitle(deal) {
+  return truncate(deal.title, 250);
+}
+
+/**
+ * Builds a markdown notification body for the given deal.
+ */
+function buildBody(deal) {
   const description = truncate(deal.description, 300) || 'No description available.';
+  const category = deal.category || 'Uncategorised';
+  const votes = String(deal.votes);
+  const author = deal.author || 'Unknown';
+  const link = deal.link || '';
 
-  const fields = [
-    { name: 'Category', value: deal.category || 'Uncategorised', inline: true },
-    { name: 'Votes', value: String(deal.votes), inline: true },
-    { name: 'Posted by', value: deal.author || 'Unknown', inline: true },
-  ];
+  return `${description}\n\nCategory: ${category} | Votes: ${votes} | By: ${author}\n${link}`;
+}
 
-  const embed = {
-    title,
-    ...(deal.link ? { url: deal.link } : {}),
-    description,
-    color: BRAND.color,
-    fields,
-    footer: {
-      text: BRAND.footerText,
-      icon_url: BRAND.iconUrl,
-    },
-    timestamp: deal.pubDate ? new Date(deal.pubDate).toISOString() : new Date().toISOString(),
-  };
-
-  if (deal.imageUrl && deal.imageUrl.startsWith('http')) {
-    embed.thumbnail = { url: deal.imageUrl };
-  }
-
-  return embed;
+/**
+ * Invokes the apprise CLI to send a notification to all configured URLs.
+ *
+ * @param {string} title
+ * @param {string} body
+ * @param {string[]} urls
+ * @returns {Promise<boolean>}
+ */
+function runApprise(title, body, urls) {
+  return new Promise(resolve => {
+    execFile(
+      'apprise',
+      ['--title', title, '--body', body, '--input-format', 'markdown', ...urls],
+      (err, stdout, stderr) => {
+        if (err) {
+          console.error(`[notifier] Apprise exited with code ${err.code}: ${stderr}`);
+          resolve(false);
+        } else {
+          resolve(true);
+        }
+      }
+    );
+  });
 }
 
 /**
