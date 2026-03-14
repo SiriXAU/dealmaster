@@ -1,90 +1,63 @@
-# dealmaster
+# Dealmaster
 
-Monitors [OzBargain](https://www.ozbargain.com.au/deals) and [r/AussieFrugal](https://www.reddit.com/r/AussieFrugal/) for new deals and sends rich notifications to a Discord channel via webhook. Runs as a self-contained Docker container configured entirely via environment variables.
+Monitors [OzBargain](https://www.ozbargain.com.au/deals) for new deals and posts rich Discord notifications via webhook. Runs as a self-contained container configured entirely via environment variables.
 
 ## Quick Start
 
 ```bash
-docker run -d \
-  --name dealmaster \
-  -e DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN" \
-  -v dealmaster-data:/data \
-  dealmaster
+# 1. Copy and fill in your webhook URL
+cp .env.example .env
+
+# 2. Start
+podman-compose up -d        # or: docker compose up -d
+
+# 3. Check the logs
+podman logs dealmaster_dealmaster_1
 ```
 
-## With Docker Compose
-
-```bash
-# Create a .env file (never commit this)
-echo 'DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN' > .env
-echo 'CATEGORIES=Computing,Gaming' >> .env
-
-docker compose up -d
-```
+On first start, Dealmaster posts the most recent OzBargain deal to your channel so you know it's live, then begins watching for new ones.
 
 ## Environment Variables
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `DISCORD_WEBHOOK_URL` | **Yes** | — | Your Discord webhook URL |
-| `CATEGORIES` | No | _(all)_ | Comma-separated category filter, e.g. `"Computing,Gaming"` |
-| `POLL_INTERVAL_SECONDS` | No | `120` | How often to check for new deals (minimum 30) |
-| `MIN_VOTES` | No | `0` | Only notify on OzBargain deals with at least this many votes¹ |
-| `MAX_SEEN_DEALS` | No | `500` | Max deal IDs to remember (prevents unbounded storage) |
-| `DISCORD_USERNAME` | No | `OzBargain Deals` | Bot display name in Discord |
-| `DATA_DIR` | No | `/data` | Path for persistence file inside the container |
-| `REDDIT_ENABLED` | No | `true` | Set to `false` to disable r/AussieFrugal monitoring |
+| `CATEGORIES` | No | _(all)_ | Comma-separated filter, e.g. `"Computing,Gaming"` |
+| `POLL_INTERVAL_SECONDS` | No | `120` | Seconds between feed checks (minimum 30) |
+| `MIN_VOTES` | No | `0` | Minimum OzBargain votes required to notify |
+| `MAX_SEEN_DEALS` | No | `500` | Maximum deal IDs to retain in the seen-deals store |
+| `DISCORD_USERNAME` | No | `Dealmaster` | Display name shown in Discord |
+| `DATA_DIR` | No | `/data` | Persistence directory inside the container |
 
-¹ Reddit does not expose vote counts in its RSS feed, so Reddit posts always have `votes: 0`. Setting `MIN_VOTES` above `0` will suppress all Reddit notifications.
+### Category Filtering
 
-## Sources
+Set `CATEGORIES` to a comma-separated list of terms. Matching is **case-insensitive and substring-based**, so `Computing` matches "Computing", "Consumer Electronics & Computers", and so on. Leave it empty (the default) to receive all categories.
 
-| Source | Feed | Branding |
-|---|---|---|
-| [OzBargain](https://www.ozbargain.com.au/deals) | RSS 2.0 | Orange embed, vote count shown |
-| [r/AussieFrugal](https://www.reddit.com/r/AussieFrugal/) | Reddit RSS (Atom) | Reddit orange embed, post flair as category |
+## Persistence
 
-Both sources are fetched in parallel on every poll. Each source uses its own Discord embed branding. Disable either source via `REDDIT_ENABLED=false` (OzBargain is always on).
+Seen deal IDs are stored in `$DATA_DIR/seen-deals.json`. The named volume in `docker-compose.yml` persists this file across restarts, preventing duplicate notifications.
 
-## Category Filtering
+## Health Check
 
-Category matching is **case-insensitive and substring-based** and applies to both OzBargain categories and Reddit post flair.
+The container includes a Docker/Podman health check. After startup and after every poll cycle, Dealmaster writes a timestamp to `/tmp/health`. The check passes as long as that file has been updated within the last 10 minutes.
 
-| Config value | Matches (OzBargain) | Matches (Reddit flair) |
-|---|---|---|
-| `Computing` | Computing, Consumer Electronics & Computers | Computing, Tech |
-| `Gaming` | Gaming, PC Gaming | Gaming |
-| `Food` | Food & Drink, Groceries | Food |
-| `Travel` | Travel, Accommodation & Travel | Travel |
-| `Home` | Home & Garden, Home Appliances | Home |
+```bash
+# Check health status
+podman inspect --format='{{.State.Health.Status}}' dealmaster_dealmaster_1
+```
 
-Leave `CATEGORIES` empty (or unset) to receive notifications for **all** categories from all sources.
+## How It Works
+
+1. Polls the [OzBargain RSS feed](https://www.ozbargain.com.au/deals/feed) every `POLL_INTERVAL_SECONDS`
+2. Filters deals by configured categories and minimum votes
+3. Compares against previously seen deal IDs stored on disk
+4. Posts a rich Discord embed for each new deal
+5. Saves updated seen IDs to disk
 
 ## Building Locally
 
 ```bash
 git clone https://github.com/SiriXAU/dealmaster
 cd dealmaster
-docker build -t dealmaster .
-
-docker run -d \
-  -e DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..." \
-  -e CATEGORIES="Computing,Gaming" \
-  -e MIN_VOTES=5 \
-  -v dealmaster-data:/data \
-  dealmaster
+podman-compose up -d --build
 ```
-
-## Persistence
-
-Seen deal IDs from all sources are stored in `/data/seen-deals.json` inside the container. Mount a volume to persist them across restarts — otherwise the bot will re-notify on all current deals after every restart.
-
-**On first start**, the bot silently seeds all current feed items as "seen" so you won't get spammed. Only deals that appear *after* startup will trigger notifications.
-
-## How it Works
-
-1. Polls OzBargain (`https://www.ozbargain.com.au/deals/feed`) and r/AussieFrugal (`https://www.reddit.com/r/AussieFrugal/new.rss`) in parallel every `POLL_INTERVAL_SECONDS`
-2. Filters deals by configured categories and minimum votes
-3. Compares against previously seen deal IDs (shared across all sources)
-4. Sends a rich Discord embed for each new deal, with source-specific branding
-5. Saves updated seen IDs to disk
