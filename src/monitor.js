@@ -1,5 +1,4 @@
 import { fetchDeals } from './fetcher.js';
-import { fetchRedditDeals } from './reddit-fetcher.js';
 import { filterDeals } from './filter.js';
 import { loadSeenIds, saveSeenIds } from './store.js';
 import { sendDealNotification, sleep } from './notifier.js';
@@ -12,15 +11,10 @@ const INTER_POST_DELAY_MS = 2000;
  *   fetch → filter → identify new deals → notify → persist
  *
  * @param {Object} config - App config
- * @param {boolean} silent - If true, mark deals as seen without notifying (first-run seeding)
  * @returns {Promise<number>} Number of notifications sent
  */
-export async function runOnce(config, silent = false) {
-  const [ozbDeals, redditDeals] = await Promise.all([
-    fetchDeals(),
-    config.redditEnabled ? fetchRedditDeals() : Promise.resolve([]),
-  ]);
-  const deals = [...ozbDeals, ...redditDeals];
+export async function runOnce(config) {
+  const deals = await fetchDeals();
   if (deals.length === 0) return 0;
 
   const filtered = filterDeals(deals, config);
@@ -29,31 +23,23 @@ export async function runOnce(config, silent = false) {
   const newDeals = filtered.filter(deal => !seenIds.has(deal.id));
 
   if (newDeals.length > 0) {
-    if (silent) {
-      console.log(`[monitor] Seeding ${newDeals.length} existing deal(s) as seen (no notifications sent).`);
-    } else {
-      console.log(`[monitor] Found ${newDeals.length} new deal(s) — sending notifications...`);
-    }
+    console.log(`[monitor] Found ${newDeals.length} new deal(s) — sending notifications...`);
   }
 
   let notified = 0;
   for (const deal of newDeals) {
     seenIds.add(deal.id);
-
-    if (!silent) {
-      const ok = await sendDealNotification(deal, config);
-      if (ok) {
-        notified++;
-        console.log(`[monitor] Notified: ${deal.title} [${deal.category}] (+${deal.votes})`);
-      }
-      // Brief delay between posts
-      if (newDeals.indexOf(deal) < newDeals.length - 1) {
-        await sleep(INTER_POST_DELAY_MS);
-      }
+    const ok = await sendDealNotification(deal, config);
+    if (ok) {
+      notified++;
+      console.log(`[monitor] Notified: ${deal.title} [${deal.category}] (+${deal.votes})`);
+    }
+    if (newDeals.indexOf(deal) < newDeals.length - 1) {
+      await sleep(INTER_POST_DELAY_MS);
     }
   }
 
-  // Also add all (unfiltered) seen IDs so we don't re-evaluate them next cycle
+  // Mark all (unfiltered) deals as seen so we don't re-evaluate them next cycle
   for (const deal of deals) {
     seenIds.add(deal.id);
   }
@@ -64,19 +50,34 @@ export async function runOnce(config, silent = false) {
 
 /**
  * Starts the polling loop.
- * The first run silently seeds seen IDs to avoid notification spam on startup.
+ * On startup, posts the most recent deal so you know the bot is live,
+ * then seeds everything else as seen before entering the regular poll loop.
  *
  * @param {Object} config - App config
  */
 export async function startMonitor(config) {
-  // First run: seed without notifying
-  await runOnce(config, true);
-  console.log(`[monitor] Initial seed complete. Watching for new deals every ${config.pollIntervalMs / 1000}s...`);
+  const deals = await fetchDeals();
+  const filtered = filterDeals(deals, config);
+  const seenIds = await loadSeenIds(config.dataDir);
 
-  // Subsequent runs: notify on new deals
+  if (filtered.length > 0) {
+    // Post the single most recent deal as a startup heartbeat
+    const latest = filtered[0];
+    console.log(`[monitor] Sending startup deal: ${latest.title}`);
+    await sendDealNotification(latest, config);
+  }
+
+  // Seed all current deals as seen so the first real poll only catches new ones
+  for (const deal of deals) {
+    seenIds.add(deal.id);
+  }
+  await saveSeenIds(seenIds, config.dataDir, config.maxSeenDeals);
+
+  console.log(`[monitor] Ready. Watching for new deals every ${config.pollIntervalMs / 1000}s...`);
+
   setInterval(async () => {
     try {
-      await runOnce(config, false);
+      await runOnce(config);
     } catch (err) {
       console.error(`[monitor] Unexpected error during poll: ${err.message}`);
     }

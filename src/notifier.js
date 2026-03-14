@@ -1,19 +1,8 @@
-const BRANDS = {
-  ozbargain: {
-    color: 0xFF6600,
-    iconUrl: 'https://www.ozbargain.com.au/sites/all/themes/ozbargain/logo-sm.png',
-    footerText: 'OzBargain',
-  },
-  reddit: {
-    color: 0xFF4500,
-    iconUrl: 'https://www.reddit.com/favicon.ico',
-    footerText: 'Reddit · r/AussieFrugal',
-  },
+const BRAND = {
+  color: 0xFF6600,
+  iconUrl: 'https://www.ozbargain.com.au/sites/all/themes/ozbargain/logo-sm.png',
+  footerText: 'OzBargain',
 };
-
-function getBrand(source) {
-  return BRANDS[source] ?? BRANDS.ozbargain;
-}
 
 /**
  * Sends a Discord webhook notification for a single deal.
@@ -23,11 +12,10 @@ function getBrand(source) {
  * @returns {Promise<boolean>} true on success
  */
 export async function sendDealNotification(deal, config) {
-  const brand = getBrand(deal.source);
-  const embed = buildEmbed(deal, brand);
+  const embed = buildEmbed(deal);
   const payload = {
     username: config.discordUsername,
-    avatar_url: brand.iconUrl,
+    avatar_url: BRAND.iconUrl,
     embeds: [embed],
   };
 
@@ -53,13 +41,13 @@ export async function sendDealNotification(deal, config) {
 /**
  * Builds a Discord embed object for the given deal.
  */
-function buildEmbed(deal, brand) {
+function buildEmbed(deal) {
   const title = truncate(deal.title, 256);
   const description = truncate(deal.description, 300) || 'No description available.';
 
   const fields = [
     { name: 'Category', value: deal.category || 'Uncategorised', inline: true },
-    ...(deal.source !== 'reddit' ? [{ name: 'Votes', value: String(deal.votes), inline: true }] : []),
+    { name: 'Votes', value: String(deal.votes), inline: true },
     { name: 'Posted by', value: deal.author || 'Unknown', inline: true },
   ];
 
@@ -67,11 +55,11 @@ function buildEmbed(deal, brand) {
     title,
     ...(deal.link ? { url: deal.link } : {}),
     description,
-    color: brand.color,
+    color: BRAND.color,
     fields,
     footer: {
-      text: brand.footerText,
-      icon_url: brand.iconUrl,
+      text: BRAND.footerText,
+      icon_url: BRAND.iconUrl,
     },
     timestamp: deal.pubDate ? new Date(deal.pubDate).toISOString() : new Date().toISOString(),
   };
