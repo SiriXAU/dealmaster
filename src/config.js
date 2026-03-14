@@ -26,6 +26,7 @@ export function loadConfig() {
   const maxSeenDeals = parseInt(process.env.MAX_SEEN_DEALS ?? '500', 10);
   const discordUsername = process.env.DISCORD_USERNAME ?? 'OzBargain Deals';
   const dataDir = process.env.DATA_DIR ?? '/data';
+  const redditEnabled = (process.env.REDDIT_ENABLED ?? 'true').toLowerCase() !== 'false';
 
   return Object.freeze({
     webhookUrl,
@@ -35,5 +36,6 @@ export function loadConfig() {
     maxSeenDeals: isNaN(maxSeenDeals) ? 500 : maxSeenDeals,
     discordUsername,
     dataDir,
+    redditEnabled,
   });
 }
