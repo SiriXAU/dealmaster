@@ -22,18 +22,42 @@ Dealmaster monitors [OzBargain](https://www.ozbargain.com.au/deals) for new deal
 
 ### Using the pre-built image (recommended)
 
+No clone required. Create two files in a new directory and you're done.
+
+**`docker-compose.yml`**
+```yaml
+services:
+  dealmaster:
+    image: ghcr.io/siriaxu/dealmaster:latest
+    restart: unless-stopped
+    environment:
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - CATEGORIES=${CATEGORIES:-}
+      - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-120}
+      - MIN_VOTES=${MIN_VOTES:-0}
+      - MAX_SEEN_DEALS=${MAX_SEEN_DEALS:-500}
+      - DISCORD_USERNAME=${DISCORD_USERNAME:-Dealmaster}
+    healthcheck:
+      test: ["CMD", "node", "-e", "try{const s=require('fs').statSync('/tmp/health');if(Date.now()-s.mtimeMs>600000)process.exit(1);}catch(e){process.exit(1);}"]
+      interval: 60s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    volumes:
+      - dealmaster-data:/data
+
+volumes:
+  dealmaster-data:
+```
+
+**`.env`**
+```
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN
+```
+
+Then:
 ```bash
-# 1. Create your environment file
-cp .env.example .env
-# Edit .env and set DISCORD_WEBHOOK_URL
-
-# 2. Create a docker-compose.yml that references the published image
-# (see "Using the Published Image" section below)
-
-# 3. Start
 podman-compose up -d        # or: docker compose up -d
-
-# 4. Confirm it's running
 podman logs dealmaster_dealmaster_1
 ```
 
@@ -166,32 +190,7 @@ A workflow is included at `.github/workflows/publish.yml` that automatically bui
 
 ### Using the published image
 
-Replace the `build: .` directive in `docker-compose.yml` with an `image:` reference:
-
-```yaml
-services:
-  dealmaster:
-    image: ghcr.io/siriaxu/dealmaster:latest
-    restart: unless-stopped
-    environment:
-      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
-      - CATEGORIES=${CATEGORIES:-}
-      - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-120}
-      - MIN_VOTES=${MIN_VOTES:-0}
-      - MAX_SEEN_DEALS=${MAX_SEEN_DEALS:-500}
-      - DISCORD_USERNAME=${DISCORD_USERNAME:-Dealmaster}
-    healthcheck:
-      test: ["CMD", "node", "-e", "try{const s=require('fs').statSync('/tmp/health');if(Date.now()-s.mtimeMs>600000)process.exit(1);}catch(e){process.exit(1);}"]
-      interval: 60s
-      timeout: 5s
-      start_period: 30s
-      retries: 3
-    volumes:
-      - dealmaster-data:/data
-
-volumes:
-  dealmaster-data:
-```
+See the [Quick Start](#quick-start) section for the ready-to-use `docker-compose.yml`. The image is published to `ghcr.io/siriaxu/dealmaster:latest` on every push to `main`.
 
 ---
 
