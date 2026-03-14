@@ -8,8 +8,7 @@ services:
       - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-120}
       - MIN_VOTES=${MIN_VOTES:-0}
       - MAX_SEEN_DEALS=${MAX_SEEN_DEALS:-500}
-      - DISCORD_USERNAME=${DISCORD_USERNAME:-OzBargain Deals}
-      - REDDIT_ENABLED=${REDDIT_ENABLED:-true}
+      - DISCORD_USERNAME=${DISCORD_USERNAME:-Dealmaster}
     volumes:
       - dealmaster-data:/data
 

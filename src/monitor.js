@@ -1,7 +1,18 @@
+import fs from 'fs';
 import { fetchDeals } from './fetcher.js';
 import { filterDeals } from './filter.js';
 import { loadSeenIds, saveSeenIds } from './store.js';
 import { sendDealNotification, sleep } from './notifier.js';
+
+const HEALTH_FILE = '/tmp/health';
+
+function touchHealth() {
+  try {
+    fs.writeFileSync(HEALTH_FILE, String(Date.now()));
+  } catch {
+    // non-fatal
+  }
+}
 
 // Delay between Discord posts to respect rate limits (30 req/min)
 const INTER_POST_DELAY_MS = 2000;
@@ -45,6 +56,7 @@ export async function runOnce(config) {
   }
 
   await saveSeenIds(seenIds, config.dataDir, config.maxSeenDeals);
+  touchHealth();
   return notified;
 }
 
@@ -72,6 +84,7 @@ export async function startMonitor(config) {
     seenIds.add(deal.id);
   }
   await saveSeenIds(seenIds, config.dataDir, config.maxSeenDeals);
+  touchHealth();
 
   console.log(`[monitor] Ready. Watching for new deals every ${config.pollIntervalMs / 1000}s...`);
 

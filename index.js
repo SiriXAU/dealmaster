@@ -10,4 +10,14 @@ console.log(`Poll every : ${config.pollIntervalMs / 1000}s`);
 console.log(`Data dir   : ${config.dataDir}`);
 console.log('=============================================');
 
+process.on('SIGTERM', () => {
+  console.log('[dealmaster] Received SIGTERM, shutting down.');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('[dealmaster] Received SIGINT, shutting down.');
+  process.exit(0);
+});
+
 startMonitor(config);
