@@ -32,6 +32,17 @@ export async function fetchDeals() {
 }
 
 /**
+ * Extracts a plain string from a category value.
+ * rss-parser returns XML elements with attributes as { _: "text", $: { attr } }
+ * objects rather than plain strings.
+ */
+function extractCategory(raw) {
+  if (!raw) return 'Uncategorised';
+  if (typeof raw === 'string') return raw;
+  return raw._ ?? 'Uncategorised';
+}
+
+/**
  * Normalizes a raw RSS item into a consistent deal shape.
  */
 function normalizeItem(item) {
@@ -43,7 +54,7 @@ function normalizeItem(item) {
     id: item.guid ?? item.link,
     title: item.title ?? 'Unknown Deal',
     link: item.link ?? '',
-    category: item.categories?.[0] ?? item.category ?? 'Uncategorised',
+    category: extractCategory(item.categories?.[0] ?? item.category),
     pubDate: item.pubDate ?? item.isoDate ?? null,
     description: stripHtml(item.contentEncoded ?? item.content ?? item.summary ?? ''),
     votes: isNaN(votes) ? 0 : votes,
