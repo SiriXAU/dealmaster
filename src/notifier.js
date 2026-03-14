@@ -29,6 +29,7 @@ export async function sendDealNotification(deal, config) {
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       console.error(`[notifier] Discord returned ${res.status}: ${body}`);
+      console.error(`[notifier] Payload was: ${JSON.stringify(payload)}`);
       return false;
     }
     return true;
@@ -64,7 +65,7 @@ function buildEmbed(deal) {
     timestamp: deal.pubDate ? new Date(deal.pubDate).toISOString() : new Date().toISOString(),
   };
 
-  if (deal.imageUrl) {
+  if (deal.imageUrl && deal.imageUrl.startsWith('http')) {
     embed.thumbnail = { url: deal.imageUrl };
   }
 
