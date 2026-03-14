@@ -1,15 +1,9 @@
 import Parser from 'rss-parser';
 
-const FEED_URL = 'https://www.ozbargain.com.au/deals/feed';
+const FEED_URL = 'https://www.reddit.com/r/AussieFrugal/new.rss';
 const USER_AGENT = 'Mozilla/5.0 (compatible; dealmaster/1.0; +https://github.com/SiriXAU/dealmaster)';
 
 const parser = new Parser({
-  customFields: {
-    item: [
-      ['ozb:meta', 'ozbMeta'],
-      ['content:encoded', 'contentEncoded'],
-    ],
-  },
   requestOptions: {
     headers: {
       'User-Agent': USER_AGENT,
@@ -18,38 +12,34 @@ const parser = new Parser({
 });
 
 /**
- * Fetches and parses the OzBargain RSS feed.
+ * Fetches and parses the r/AussieFrugal Reddit RSS feed.
  * @returns {Promise<Array>} Array of normalized deal objects, or [] on error.
  */
-export async function fetchDeals() {
+export async function fetchRedditDeals() {
   try {
     const feed = await parser.parseURL(FEED_URL);
     return feed.items.map(normalizeItem);
   } catch (err) {
-    console.error(`[fetcher] Failed to fetch feed: ${err.message}`);
+    console.error(`[reddit-fetcher] Failed to fetch feed: ${err.message}`);
     return [];
   }
 }
 
 /**
- * Normalizes a raw RSS item into a consistent deal shape.
+ * Normalizes a raw Reddit Atom item into a consistent deal shape.
  */
 function normalizeItem(item) {
-  const meta = item.ozbMeta ?? {};
-  const votes = parseInt(meta['$']?.votes ?? meta.votes ?? '0', 10);
-  const imageUrl = meta['$']?.image ?? meta.image ?? null;
-
   return {
     id: item.guid ?? item.link,
     title: item.title ?? 'Unknown Deal',
     link: item.link ?? '',
-    category: item.categories?.[0] ?? item.category ?? 'Uncategorised',
-    pubDate: item.pubDate ?? item.isoDate ?? null,
-    description: stripHtml(item.contentEncoded ?? item.content ?? item.summary ?? ''),
-    votes: isNaN(votes) ? 0 : votes,
-    imageUrl,
-    author: item.creator ?? item['dc:creator'] ?? 'Unknown',
-    source: 'ozbargain',
+    category: item.categories?.[0] ?? 'Uncategorised',
+    pubDate: item.isoDate ?? item.pubDate ?? null,
+    description: stripHtml(item.content ?? item.summary ?? ''),
+    votes: 0,        // Reddit RSS does not expose vote counts
+    imageUrl: null,  // Reddit RSS does not include post images
+    author: item.author ?? item.creator ?? 'Unknown',
+    source: 'reddit',
   };
 }
 

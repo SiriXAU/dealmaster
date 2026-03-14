@@ -1,4 +1,5 @@
 import { fetchDeals } from './fetcher.js';
+import { fetchRedditDeals } from './reddit-fetcher.js';
 import { filterDeals } from './filter.js';
 import { loadSeenIds, saveSeenIds } from './store.js';
 import { sendDealNotification, sleep } from './notifier.js';
@@ -15,7 +16,11 @@ const INTER_POST_DELAY_MS = 2000;
  * @returns {Promise<number>} Number of notifications sent
  */
 export async function runOnce(config, silent = false) {
-  const deals = await fetchDeals();
+  const [ozbDeals, redditDeals] = await Promise.all([
+    fetchDeals(),
+    config.redditEnabled ? fetchRedditDeals() : Promise.resolve([]),
+  ]);
+  const deals = [...ozbDeals, ...redditDeals];
   if (deals.length === 0) return 0;
 
   const filtered = filterDeals(deals, config);

@@ -1,6 +1,19 @@
-// OzBargain brand orange
-const EMBED_COLOR = 0xFF6600;
-const OZBARGAIN_ICON = 'https://www.ozbargain.com.au/sites/all/themes/ozbargain/logo-sm.png';
+const BRANDS = {
+  ozbargain: {
+    color: 0xFF6600,
+    iconUrl: 'https://www.ozbargain.com.au/sites/all/themes/ozbargain/logo-sm.png',
+    footerText: 'OzBargain',
+  },
+  reddit: {
+    color: 0xFF4500,
+    iconUrl: 'https://www.reddit.com/favicon.ico',
+    footerText: 'Reddit · r/AussieFrugal',
+  },
+};
+
+function getBrand(source) {
+  return BRANDS[source] ?? BRANDS.ozbargain;
+}
 
 /**
  * Sends a Discord webhook notification for a single deal.
@@ -10,10 +23,11 @@ const OZBARGAIN_ICON = 'https://www.ozbargain.com.au/sites/all/themes/ozbargain/
  * @returns {Promise<boolean>} true on success
  */
 export async function sendDealNotification(deal, config) {
-  const embed = buildEmbed(deal);
+  const brand = getBrand(deal.source);
+  const embed = buildEmbed(deal, brand);
   const payload = {
     username: config.discordUsername,
-    avatar_url: OZBARGAIN_ICON,
+    avatar_url: brand.iconUrl,
     embeds: [embed],
   };
 
@@ -39,23 +53,25 @@ export async function sendDealNotification(deal, config) {
 /**
  * Builds a Discord embed object for the given deal.
  */
-function buildEmbed(deal) {
+function buildEmbed(deal, brand) {
   const title = truncate(deal.title, 256);
   const description = truncate(deal.description, 300) || 'No description available.';
+
+  const fields = [
+    { name: 'Category', value: deal.category || 'Uncategorised', inline: true },
+    ...(deal.source !== 'reddit' ? [{ name: 'Votes', value: String(deal.votes), inline: true }] : []),
+    { name: 'Posted by', value: deal.author || 'Unknown', inline: true },
+  ];
 
   const embed = {
     title,
     url: deal.link,
     description,
-    color: EMBED_COLOR,
-    fields: [
-      { name: 'Category', value: deal.category || 'Uncategorised', inline: true },
-      { name: 'Votes', value: String(deal.votes), inline: true },
-      { name: 'Posted by', value: deal.author || 'Unknown', inline: true },
-    ],
+    color: brand.color,
+    fields,
     footer: {
-      text: 'OzBargain',
-      icon_url: OZBARGAIN_ICON,
+      text: brand.footerText,
+      icon_url: brand.iconUrl,
     },
     timestamp: deal.pubDate ? new Date(deal.pubDate).toISOString() : new Date().toISOString(),
   };
