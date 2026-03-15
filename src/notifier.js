@@ -84,26 +84,25 @@ function buildEmbed(deal) {
   const title = truncate(deal.title, 256);
   const description = truncate(deal.description, 300) || 'No description available.';
 
-  const fields = [];
+  // Always emit exactly 3 inline fields per row so Discord's grid stays aligned.
+  // Row 1: Price | Store | Delivery
+  // Row 2: Category | Votes | Posted by
+  // Row 3 (optional): Expires — only added when present; shown alone, full-width
+  const inline = (name, value) => ({ name, value, inline: true });
 
-  if (deal.price) {
-    fields.push({ name: 'Price', value: deal.price, inline: true });
-  }
-  if (deal.store) {
-    fields.push({ name: 'Store', value: deal.store, inline: true });
-  }
-  if (deal.delivery) {
-    fields.push({ name: 'Delivery', value: deal.delivery, inline: true });
-  }
-
-  fields.push({ name: 'Category', value: deal.category || 'Uncategorised', inline: true });
-  fields.push({ name: 'Votes', value: String(deal.votes), inline: true });
-  fields.push({ name: 'Posted by', value: deal.author || 'Unknown', inline: true });
+  const fields = [
+    inline('Price',     deal.price    || '—'),
+    inline('Store',     deal.store    || '—'),
+    inline('Delivery',  deal.delivery || '—'),
+    inline('Category',  deal.category || 'Uncategorised'),
+    inline('Votes',     String(deal.votes)),
+    inline('Posted by', deal.author   || 'Unknown'),
+  ];
 
   if (deal.expiry) {
     const expiryLabel = formatExpiry(deal.expiry);
     if (expiryLabel) {
-      fields.push({ name: 'Expires', value: expiryLabel, inline: true });
+      fields.push({ name: 'Expires', value: expiryLabel, inline: false });
     }
   }
 
