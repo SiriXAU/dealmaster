@@ -1,52 +1,168 @@
 import { execFile } from 'child_process';
 
+const BRAND = {
+  color: 0xFF6600,
+  iconUrl: 'https://www.ozbargain.com.au/sites/all/themes/ozbargain/logo-sm.png',
+  footerText: 'OzBargain',
+};
+
 /**
- * Sends a notification for a single deal via the Apprise CLI.
+ * Sends a notification for a single deal to all configured URLs.
+ * Discord URLs (discord://id/token) receive a rich embed via the webhook API.
+ * All other URLs are sent via the Apprise CLI.
  *
- * @param {Object} deal - Normalized deal object
+ * @param {Object} deal   - Normalized deal object
  * @param {Object} config - App config (appriseUrls)
- * @returns {Promise<boolean>} true on success
+ * @returns {Promise<boolean>} true if all destinations succeeded
  */
 export async function sendDealNotification(deal, config) {
-  const title = buildTitle(deal);
-  const body = buildBody(deal);
-  return runApprise(title, body, config.appriseUrls);
+  const discordUrls = [];
+  const appriseUrls = [];
+
+  for (const url of config.appriseUrls) {
+    const webhookUrl = parseDiscordUrl(url);
+    if (webhookUrl) {
+      discordUrls.push(webhookUrl);
+    } else {
+      appriseUrls.push(url);
+    }
+  }
+
+  const results = await Promise.all([
+    ...discordUrls.map(webhookUrl => sendDiscordEmbed(deal, webhookUrl)),
+    appriseUrls.length > 0 ? sendApprise(deal, appriseUrls) : Promise.resolve(true),
+  ]);
+
+  return results.every(Boolean);
 }
 
 /**
- * Builds a notification title for the given deal.
+ * Converts a discord:// Apprise URL to a Discord webhook HTTPS URL.
+ * discord://webhook_id/webhook_token → https://discord.com/api/webhooks/id/token
+ * Returns null if the URL is not a discord:// URL.
  */
-function buildTitle(deal) {
-  return truncate(deal.title, 250);
+function parseDiscordUrl(url) {
+  const match = url.match(/^discord:\/\/([^/]+)\/(.+)$/i);
+  if (!match) return null;
+  return `https://discord.com/api/webhooks/${match[1]}/${match[2]}`;
 }
 
 /**
- * Builds a markdown notification body for the given deal.
+ * Posts a rich Discord embed for the given deal.
  */
-function buildBody(deal) {
+async function sendDiscordEmbed(deal, webhookUrl) {
+  const embed = buildEmbed(deal);
+  const payload = {
+    username: 'Dealmaster',
+    avatar_url: BRAND.iconUrl,
+    embeds: [embed],
+  };
+
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      console.error(`[notifier] Discord returned ${res.status}: ${body}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error(`[notifier] Failed to send Discord embed: ${err.message}`);
+    return false;
+  }
+}
+
+/**
+ * Builds a Discord embed object for the given deal.
+ */
+function buildEmbed(deal) {
+  const title = truncate(deal.title, 256);
   const description = truncate(deal.description, 300) || 'No description available.';
-  const category = deal.category || 'Uncategorised';
-  const votes = String(deal.votes);
-  const author = deal.author || 'Unknown';
-  const link = deal.link || '';
 
-  return `${description}\n\nCategory: ${category} | Votes: ${votes} | By: ${author}\n${link}`;
+  const fields = [];
+
+  if (deal.price) {
+    fields.push({ name: 'Price', value: deal.price, inline: true });
+  }
+  if (deal.store) {
+    fields.push({ name: 'Store', value: deal.store, inline: true });
+  }
+  if (deal.delivery) {
+    fields.push({ name: 'Delivery', value: deal.delivery, inline: true });
+  }
+
+  fields.push({ name: 'Category', value: deal.category || 'Uncategorised', inline: true });
+  fields.push({ name: 'Votes', value: String(deal.votes), inline: true });
+  fields.push({ name: 'Posted by', value: deal.author || 'Unknown', inline: true });
+
+  if (deal.expiry) {
+    const expiryLabel = formatExpiry(deal.expiry);
+    if (expiryLabel) {
+      fields.push({ name: 'Expires', value: expiryLabel, inline: true });
+    }
+  }
+
+  const embed = {
+    title,
+    ...(deal.link ? { url: deal.link } : {}),
+    description,
+    color: BRAND.color,
+    fields,
+    footer: {
+      text: BRAND.footerText,
+      icon_url: BRAND.iconUrl,
+    },
+    timestamp: deal.pubDate ? new Date(deal.pubDate).toISOString() : new Date().toISOString(),
+  };
+
+  if (deal.imageUrl && deal.imageUrl.startsWith('http')) {
+    embed.thumbnail = { url: deal.imageUrl };
+  }
+
+  return embed;
 }
 
 /**
- * Invokes the apprise CLI to send a notification to all configured URLs.
- *
- * @param {string} title
- * @param {string} body
- * @param {string[]} urls
- * @returns {Promise<boolean>}
+ * Formats an expiry date/string for display. Returns null if unparseable.
  */
-function runApprise(title, body, urls) {
+function formatExpiry(expiry) {
+  const d = new Date(expiry);
+  if (isNaN(d.getTime())) return String(expiry);
+  return d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+/**
+ * Sends a notification to all non-Discord URLs via the Apprise CLI.
+ */
+function sendApprise(deal, urls) {
+  const title = truncate(deal.title, 250);
+  const parts = [truncate(deal.description, 300) || 'No description available.'];
+
+  const meta = [];
+  if (deal.price) meta.push(`Price: ${deal.price}`);
+  if (deal.store) meta.push(`Store: ${deal.store}`);
+  if (deal.delivery) meta.push(`Delivery: ${deal.delivery}`);
+  meta.push(`Category: ${deal.category || 'Uncategorised'}`);
+  meta.push(`Votes: ${deal.votes}`);
+  meta.push(`By: ${deal.author || 'Unknown'}`);
+  if (deal.expiry) meta.push(`Expires: ${deal.expiry}`);
+
+  parts.push('');
+  parts.push(meta.join(' | '));
+  if (deal.link) parts.push(deal.link);
+
+  const body = parts.join('\n');
+
   return new Promise(resolve => {
     execFile(
       'apprise',
-      ['--title', title, '--body', body, '--input-format', 'markdown', ...urls],
-      (err, stdout, stderr) => {
+      ['--title', title, '--body', body, ...urls],
+      (err, _stdout, stderr) => {
         if (err) {
           console.error(`[notifier] Apprise exited with code ${err.code}: ${stderr}`);
           resolve(false);

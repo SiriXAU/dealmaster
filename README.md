@@ -10,6 +10,7 @@ Dealmaster monitors [OzBargain](https://www.ozbargain.com.au/deals) for new deal
 
 - Polls the OzBargain RSS feed on a configurable interval
 - Sends notifications via Apprise to any supported service (Discord, Slack, Telegram, email, and more)
+- Discord URLs receive **rich embeds** — coloured card with price, store, delivery method, category, votes, author, expiry, thumbnail, and timestamp
 - Category and minimum-vote filtering to reduce noise
 - Startup heartbeat — sends a notification for the most recent deal on launch so you know it's live
 - Persistent seen-deal tracking to prevent duplicate notifications across restarts
@@ -85,7 +86,7 @@ On first start, Dealmaster sends a notification for the most recent OzBargain de
 | Pushover | `pover://user@token` |
 | Gotify | `gotify://hostname/token` |
 
-> **Discord tip:** The webhook URL `https://discord.com/api/webhooks/1234/abcd` maps to `discord://1234/abcd`.
+> **Discord tip:** The webhook URL `https://discord.com/api/webhooks/1234/abcd` maps to `discord://1234/abcd`. Discord URLs receive **rich embeds** (coloured card with inline fields and thumbnail) sent directly via the webhook API — identical in appearance to the native Discord bot format. All other Apprise URLs receive a plain-text notification via the Apprise CLI.
 
 See the [Apprise wiki](https://github.com/caronc/apprise/wiki) for all supported services and URL formats.
 
