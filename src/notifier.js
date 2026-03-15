@@ -119,9 +119,7 @@ function buildEmbed(deal) {
     timestamp: deal.pubDate ? new Date(deal.pubDate).toISOString() : new Date().toISOString(),
   };
 
-  if (deal.imageUrl && deal.imageUrl.startsWith('http')) {
-    embed.thumbnail = { url: deal.imageUrl };
-  }
+  embed.thumbnail = { url: deal.imageUrl?.startsWith('http') ? deal.imageUrl : BRAND.iconUrl };
 
   return embed;
 }
