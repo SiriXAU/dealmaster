@@ -3,12 +3,11 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - APPRISE_URLS=${APPRISE_URLS}
       - CATEGORIES=${CATEGORIES:-}
       - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-120}
       - MIN_VOTES=${MIN_VOTES:-0}
       - MAX_SEEN_DEALS=${MAX_SEEN_DEALS:-500}
-      - DISCORD_USERNAME=${DISCORD_USERNAME:-Dealmaster}
     healthcheck:
       test: ["CMD", "node", "-e", "try{const s=require('fs').statSync('/tmp/health');if(Date.now()-s.mtimeMs>600000)process.exit(1);}catch(e){process.exit(1);}"]
       interval: 60s

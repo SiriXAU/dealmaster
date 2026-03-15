@@ -14,7 +14,7 @@ function touchHealth() {
   }
 }
 
-// Delay between Discord posts to respect rate limits (30 req/min)
+// Delay between notifications to avoid overwhelming services
 const INTER_POST_DELAY_MS = 2000;
 
 /**
