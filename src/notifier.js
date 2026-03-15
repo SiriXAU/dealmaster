@@ -2,7 +2,7 @@ import { execFile } from 'child_process';
 
 const BRAND = {
   color: 0xFF6600,
-  iconUrl: 'https://www.ozbargain.com.au/sites/all/themes/ozbargain/logo-sm.png',
+  iconUrl: 'https://www.ozbargain.com.au/themes/ozbargain/logo-icon-256.png',
   footerText: 'OzBargain',
 };
 
