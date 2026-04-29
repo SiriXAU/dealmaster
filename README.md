@@ -31,14 +31,13 @@ services:
     image: ghcr.io/sirixau/dealmaster:latest
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
+      - "${WEB_PORT:-8080}:8080"
     environment:
       - APPRISE_URLS=${APPRISE_URLS}
       - CATEGORIES=${CATEGORIES:-}
       - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-120}
       - MIN_VOTES=${MIN_VOTES:-0}
       - MAX_SEEN_DEALS=${MAX_SEEN_DEALS:-500}
-      - WEB_PORT=${WEB_PORT:-8080}
     healthcheck:
       test: ["CMD", "node", "-e", "try{const s=require('fs').statSync('/tmp/health');if(Date.now()-s.mtimeMs>600000)process.exit(1);}catch(e){process.exit(1);}"]
       interval: 60s
@@ -68,7 +67,7 @@ On first start, Dealmaster sends a notification for the most recent OzBargain de
 
 ## Web Settings Interface
 
-Dealmaster includes a built-in settings UI served on port 8080 (configurable via `WEB_PORT`). Open it in any browser — it works on desktop and mobile, and supports dark mode automatically.
+Dealmaster includes a built-in settings UI served on port 8080 inside the container. Open it in any browser — it works on desktop and mobile, and supports dark mode automatically.
 
 ![Settings UI showing notification URLs, category chips, polling and filtering controls](preview.html)
 
@@ -109,12 +108,14 @@ podman run --rm -v dealmaster_dealmaster-data:/data alpine rm /data/settings.jso
 
 ### Changing the web UI port
 
+The container always listens on port **8080** internally. `WEB_PORT` controls which host port maps to it:
+
 ```
 # .env
 WEB_PORT=9000
 ```
 
-The `ports` binding in `docker-compose.yml` uses the same variable, so host and container ports stay in sync automatically.
+With the above set, the UI is accessible at `http://localhost:9000` on the host while the container still binds internally to 8080.
 
 ### Restricting access
 
@@ -140,7 +141,7 @@ These control initial configuration and serve as fallback values once the web UI
 | `MIN_VOTES` | No | `0` | Minimum OzBargain vote count required to notify |
 | `MAX_SEEN_DEALS` | No | `500` | Maximum deal IDs to retain in the persistence store |
 | `DATA_DIR` | No | `/data` | Path for persistence files inside the container — not configurable via web UI |
-| `WEB_PORT` | No | `8080` | Port the web settings UI listens on |
+| `WEB_PORT` | No | `8080` | Host port mapped to the web settings UI (container always listens on 8080 internally) |
 
 `APPRISE_URLS` is required on the **first run only**. Once you've saved settings via the web UI, the container can start without it.
 
