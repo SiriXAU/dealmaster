@@ -16,6 +16,16 @@ const SOURCE_BRANDS = {
     iconUrl:    'https://www.gamerpower.com/favicon.ico',
     footerText: 'GamerPower · Freebies',
   },
+  'gamerpower-games': {
+    color:      0xEF4444,
+    iconUrl:    'https://www.gamerpower.com/favicon.ico',
+    footerText: 'GamerPower · Games',
+  },
+  'gamerpower-loot': {
+    color:      0xEF4444,
+    iconUrl:    'https://www.gamerpower.com/favicon.ico',
+    footerText: 'GamerPower · Loot',
+  },
   epicbundle: {
     color:      0x8B5CF6,
     iconUrl:    'https://www.epicbundle.com/favicon.ico',

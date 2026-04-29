@@ -215,11 +215,33 @@ const HTML = `<!DOCTYPE html>
 
         <div class="flex items-center justify-between py-3.5">
           <div>
-            <div class="text-sm font-medium text-zinc-700 dark:text-zinc-300">GamerPower <span class="text-xs font-normal text-zinc-400 dark:text-zinc-500 ml-1">gamerpower.com/rss</span></div>
-            <div class="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">Free game giveaways &amp; freebies</div>
+            <div class="text-sm font-medium text-zinc-700 dark:text-zinc-300">GamerPower <span class="text-xs font-normal text-zinc-400 dark:text-zinc-500 ml-1">gamerpower.com/rss/giveaways</span></div>
+            <div class="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">All free game giveaways &amp; freebies</div>
           </div>
           <label class="relative inline-flex items-center cursor-pointer ml-4 shrink-0">
             <input type="checkbox" id="toggle-gamerpower" class="sr-only peer" />
+            <div class="w-9 h-5 bg-zinc-200 dark:bg-zinc-700 rounded-full peer peer-checked:bg-orange-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+          </label>
+        </div>
+
+        <div class="flex items-center justify-between py-3.5">
+          <div>
+            <div class="text-sm font-medium text-zinc-700 dark:text-zinc-300">GamerPower · Games <span class="text-xs font-normal text-zinc-400 dark:text-zinc-500 ml-1">gamerpower.com/rss/games</span></div>
+            <div class="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">Full free games only (no loot or DLC)</div>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer ml-4 shrink-0">
+            <input type="checkbox" id="toggle-gamerpower-games" class="sr-only peer" />
+            <div class="w-9 h-5 bg-zinc-200 dark:bg-zinc-700 rounded-full peer peer-checked:bg-orange-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+          </label>
+        </div>
+
+        <div class="flex items-center justify-between py-3.5">
+          <div>
+            <div class="text-sm font-medium text-zinc-700 dark:text-zinc-300">GamerPower · Loot <span class="text-xs font-normal text-zinc-400 dark:text-zinc-500 ml-1">gamerpower.com/rss/loot</span></div>
+            <div class="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">In-game loot, DLC &amp; bonus content only</div>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer ml-4 shrink-0">
+            <input type="checkbox" id="toggle-gamerpower-loot" class="sr-only peer" />
             <div class="w-9 h-5 bg-zinc-200 dark:bg-zinc-700 rounded-full peer peer-checked:bg-orange-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
           </label>
         </div>
@@ -308,9 +330,11 @@ const HTML = `<!DOCTYPE html>
     const pollEl       = document.getElementById('poll-interval');
     const minVotesEl   = document.getElementById('min-votes');
     const maxSeenEl    = document.getElementById('max-seen');
-    const toggleGameDeals  = document.getElementById('toggle-game-deals');
-    const toggleGamerpower = document.getElementById('toggle-gamerpower');
-    const toggleEpicbundle = document.getElementById('toggle-epicbundle');
+    const toggleGameDeals       = document.getElementById('toggle-game-deals');
+    const toggleGamerpower      = document.getElementById('toggle-gamerpower');
+    const toggleGamerpowerGames = document.getElementById('toggle-gamerpower-games');
+    const toggleGamerpowerLoot  = document.getElementById('toggle-gamerpower-loot');
+    const toggleEpicbundle      = document.getElementById('toggle-epicbundle');
     const saveBtn      = document.getElementById('save-btn');
     const urlIndicator = document.getElementById('url-indicator');
     const bannerOk     = document.getElementById('banner-success');
@@ -429,9 +453,11 @@ const HTML = `<!DOCTYPE html>
       minVotesEl.value  = data.minVotes     != null ? data.minVotes     : 0;
       maxSeenEl.value   = data.maxSeenDeals != null ? data.maxSeenDeals : 500;
       var gs = data.gamingSources || {};
-      toggleGameDeals.checked  = Boolean(gs.gameDeals);
-      toggleGamerpower.checked = Boolean(gs.gamerpower);
-      toggleEpicbundle.checked = Boolean(gs.epicbundle);
+      toggleGameDeals.checked       = Boolean(gs.gameDeals);
+      toggleGamerpower.checked      = Boolean(gs.gamerpower);
+      toggleGamerpowerGames.checked = Boolean(gs.gamerpowerGames);
+      toggleGamerpowerLoot.checked  = Boolean(gs.gamerpowerLoot);
+      toggleEpicbundle.checked      = Boolean(gs.epicbundle);
       renderChips();
       renderKeywordChips();
       updateUrlIndicator();
@@ -473,9 +499,11 @@ const HTML = `<!DOCTYPE html>
         minVotes:            parseInt(minVotesEl.value,  10) || 0,
         maxSeenDeals:        parseInt(maxSeenEl.value,   10) || 500,
         gamingSources: {
-          gameDeals:  toggleGameDeals.checked,
-          gamerpower: toggleGamerpower.checked,
-          epicbundle: toggleEpicbundle.checked,
+          gameDeals:       toggleGameDeals.checked,
+          gamerpower:      toggleGamerpower.checked,
+          gamerpowerGames: toggleGamerpowerGames.checked,
+          gamerpowerLoot:  toggleGamerpowerLoot.checked,
+          epicbundle:      toggleEpicbundle.checked,
         },
       };
 
