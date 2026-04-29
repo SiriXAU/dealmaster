@@ -29,7 +29,6 @@ const OZB_FEED_URL = 'https://www.ozbargain.com.au/deals/feed';
 const GAMERPOWER_API_BASE = 'https://www.gamerpower.com/api/giveaways';
 
 export const GAMING_FEED_URLS = {
-  gameDeals:  'https://game-deals.app/rss/all',
   epicbundle: 'https://epicbundle.com/feed',
 };
 
@@ -79,7 +78,6 @@ async function fetchGamerPower(sourceId, apiUrl) {
 export async function fetchAllDeals(config) {
   const { gamingSources = {} } = config;
   const tasks = [fetchDeals()];
-  if (gamingSources.gameDeals)       tasks.push(fetchRssFeed('game-deals',       GAMING_FEED_URLS.gameDeals));
   if (gamingSources.gamerpower)      tasks.push(fetchGamerPower('gamerpower',       GAMERPOWER_API_BASE));
   if (gamingSources.gamerpowerGames) tasks.push(fetchGamerPower('gamerpower-games', `${GAMERPOWER_API_BASE}?type=game`));
   if (gamingSources.gamerpowerLoot)  tasks.push(fetchGamerPower('gamerpower-loot',  `${GAMERPOWER_API_BASE}?type=loot`));
@@ -167,8 +165,7 @@ function normalizeOzbItem(item) {
 // ── Gaming source helpers ─────────────────────────────────────────────────────
 
 const GAMING_SOURCE_TYPE = {
-  'game-deals': 'Deal',
-  epicbundle:   'Bundle',
+  epicbundle: 'Bundle',
 };
 
 function extractMediaUrl(item) {
