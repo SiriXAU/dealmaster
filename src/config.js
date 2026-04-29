@@ -47,6 +47,13 @@ export function loadConfig(savedSettings = null) {
   const maxSeenDeals = s.maxSeenDeals != null ? Number(s.maxSeenDeals) : parseInt(process.env.MAX_SEEN_DEALS ?? '500', 10);
   const dataDir      = process.env.DATA_DIR ?? '/data';
 
+  const gs = s.gamingSources ?? {};
+  const gamingSources = Object.freeze({
+    gameDeals:  gs.gameDeals  != null ? Boolean(gs.gameDeals)  : (process.env.GAMING_DEALS_ENABLED === 'true'),
+    gamerpower: gs.gamerpower != null ? Boolean(gs.gamerpower) : (process.env.GAMERPOWER_ENABLED   === 'true'),
+    epicbundle: gs.epicbundle != null ? Boolean(gs.epicbundle) : (process.env.EPICBUNDLE_ENABLED   === 'true'),
+  });
+
   return Object.freeze({
     appriseUrls,
     categories,
@@ -55,5 +62,6 @@ export function loadConfig(savedSettings = null) {
     minVotes:       isNaN(minVotes)     ? 0   : minVotes,
     maxSeenDeals:   isNaN(maxSeenDeals) ? 500 : maxSeenDeals,
     dataDir,
+    gamingSources,
   });
 }

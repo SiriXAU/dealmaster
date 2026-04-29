@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { fetchDeals } from './fetcher.js';
+import { fetchAllDeals } from './fetcher.js';
 import { filterDeals } from './filter.js';
 import { loadSeenIds, saveSeenIds } from './store.js';
 import { sendDealNotification, sleep } from './notifier.js';
@@ -45,7 +45,7 @@ export function startPollLoop(config) {
  * @returns {Promise<number>} Number of notifications sent
  */
 export async function runOnce(config) {
-  const deals = await fetchDeals();
+  const deals = await fetchAllDeals(config);
   if (deals.length === 0) return 0;
 
   const filtered = filterDeals(deals, config);
@@ -88,7 +88,7 @@ export async function runOnce(config) {
  * @param {Object} config - App config
  */
 export async function startMonitor(config) {
-  const deals = await fetchDeals();
+  const deals = await fetchAllDeals(config);
   const filtered = filterDeals(deals, config);
   const seenIds = await loadSeenIds(config.dataDir);
 
