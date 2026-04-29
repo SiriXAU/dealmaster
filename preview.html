@@ -48,9 +48,14 @@
         <span class="text-sm text-zinc-500">settings</span>
       </div>
       <!-- Status pill -->
-      <div class="flex items-center gap-1.5 text-xs text-zinc-500">
+      <div class="hidden sm:flex items-center gap-1.5 text-xs text-zinc-500">
         <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block"></span>
         Running · polling every 120s
+      </div>
+      <!-- Mobile: compact status dot only -->
+      <div class="flex sm:hidden items-center gap-1.5 text-xs text-zinc-500">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>
+        <span>Running</span>
       </div>
     </div>
   </header>
@@ -125,7 +130,7 @@
     </div>
 
     <!-- Section 3 & 4 side by side -->
-    <div class="grid grid-cols-2 gap-4">
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
       <!-- Polling -->
       <div class="bg-white border border-zinc-200 rounded-2xl overflow-hidden shadow-sm">
@@ -192,6 +197,47 @@
   <div class="max-w-2xl mx-auto px-6 pb-8">
     <p class="text-xs text-zinc-300 text-center">dealmaster · web UI preview · <a href="#" class="hover:text-zinc-400">port 8080</a></p>
   </div>
+
+  <script>
+    const textInput = document.querySelector('input[type="text"]');
+
+    function getSelected() {
+      return textInput.value
+        .split(',')
+        .map(v => v.trim())
+        .filter(Boolean)
+        .map(v => v.toLowerCase());
+    }
+
+    function syncChipsToInput() {
+      const selected = getSelected();
+      document.querySelectorAll('[class*="chip-"]').forEach(chip => {
+        const match = selected.includes(chip.textContent.trim().toLowerCase());
+        chip.classList.toggle('chip-active', match);
+        chip.classList.toggle('chip-inactive', !match);
+      });
+    }
+
+    document.querySelectorAll('[class*="chip-"]').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const label = chip.textContent.trim();
+        let values = textInput.value
+          .split(',')
+          .map(v => v.trim())
+          .filter(Boolean);
+        const idx = values.findIndex(v => v.toLowerCase() === label.toLowerCase());
+        if (idx === -1) {
+          values.push(label);
+        } else {
+          values.splice(idx, 1);
+        }
+        textInput.value = values.join(', ');
+        syncChipsToInput();
+      });
+    });
+
+    textInput.addEventListener('input', syncChipsToInput);
+  </script>
 
 </body>
 </html>
