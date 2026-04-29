@@ -168,6 +168,32 @@ const HTML = `<!DOCTYPE html>
       </div>
     </div>
 
+    <!-- Keywords -->
+    <div class="bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-2xl overflow-hidden shadow-sm">
+      <div class="px-5 pt-5 pb-4 border-b border-zinc-100 dark:border-zinc-700/60">
+        <h2 class="text-sm font-semibold">Keyword Filter</h2>
+        <p class="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">Only notify for deals whose title, description, or store matches at least one keyword. Leave blank to receive all deals.</p>
+      </div>
+      <div class="px-5 py-4 space-y-3">
+        <div id="keyword-chips" class="flex flex-wrap gap-1.5">
+          <button type="button" data-chip="Free"         class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Free</button>
+          <button type="button" data-chip="Steam"        class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Steam</button>
+          <button type="button" data-chip="Epic Games"   class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Epic Games</button>
+          <button type="button" data-chip="PlayStation"  class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">PlayStation</button>
+          <button type="button" data-chip="Xbox"         class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Xbox</button>
+          <button type="button" data-chip="Nintendo"     class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Nintendo</button>
+          <button type="button" data-chip="Amazon"       class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Amazon</button>
+          <button type="button" data-chip="Cashback"     class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Cashback</button>
+        </div>
+        <input
+          id="keywords-input"
+          type="text"
+          class="w-full text-sm bg-zinc-50 dark:bg-zinc-900 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 placeholder-zinc-400 dark:placeholder-zinc-600 transition-colors"
+          placeholder="Or type custom keywords, comma-separated&hellip;"
+        />
+      </div>
+    </div>
+
     <!-- Polling + Filtering -->
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
@@ -232,6 +258,8 @@ const HTML = `<!DOCTYPE html>
   <script>
     const chipsEl      = document.getElementById('chips');
     const catInput     = document.getElementById('categories-input');
+    const kwChipsEl    = document.getElementById('keyword-chips');
+    const kwInput      = document.getElementById('keywords-input');
     const appriseEl    = document.getElementById('apprise-urls');
     const pollEl       = document.getElementById('poll-interval');
     const minVotesEl   = document.getElementById('min-votes');
@@ -268,6 +296,28 @@ const HTML = `<!DOCTYPE html>
       renderChips();
     });
     catInput.addEventListener('input', renderChips);
+
+    // ── Keyword chips ─────────────────────────────────────────────────────
+    function getSelectedKeywords() {
+      return new Set(kwInput.value.split(',').map(function(v){ return v.trim().toLowerCase(); }).filter(Boolean));
+    }
+    function renderKeywordChips() {
+      var selected = getSelectedKeywords();
+      kwChipsEl.querySelectorAll('[data-chip]').forEach(function(chip) {
+        chip.dataset.active = selected.has(chip.dataset.chip.toLowerCase()) ? 'true' : 'false';
+      });
+    }
+    kwChipsEl.addEventListener('click', function(e) {
+      var chip = e.target.closest('[data-chip]');
+      if (!chip) return;
+      var label  = chip.dataset.chip;
+      var values = kwInput.value.split(',').map(function(v){ return v.trim(); }).filter(Boolean);
+      var idx    = values.findIndex(function(v){ return v.toLowerCase() === label.toLowerCase(); });
+      if (idx === -1) values.push(label); else values.splice(idx, 1);
+      kwInput.value = values.join(', ');
+      renderKeywordChips();
+    });
+    kwInput.addEventListener('input', renderKeywordChips);
 
     // ── URL indicator ─────────────────────────────────────────────────────
     function updateUrlIndicator() {
@@ -327,10 +377,12 @@ const HTML = `<!DOCTYPE html>
     function populateForm(data) {
       appriseEl.value   = (data.appriseUrls || []).join('\\n');
       catInput.value    = (data.categories  || []).join(', ');
+      kwInput.value     = (data.keywords    || []).join(', ');
       pollEl.value      = data.pollIntervalSeconds != null ? data.pollIntervalSeconds : 120;
       minVotesEl.value  = data.minVotes     != null ? data.minVotes     : 0;
       maxSeenEl.value   = data.maxSeenDeals != null ? data.maxSeenDeals : 500;
       renderChips();
+      renderKeywordChips();
       updateUrlIndicator();
       setStatus(true, data.pollIntervalSeconds || 120);
       if (data.savedAt && !data.fromEnv) {
@@ -365,6 +417,7 @@ const HTML = `<!DOCTYPE html>
       var payload = {
         appriseUrls:         urls,
         categories:          catInput.value.split(',').map(function(v){ return v.trim(); }).filter(Boolean),
+        keywords:            kwInput.value.split(',').map(function(v){ return v.trim(); }).filter(Boolean),
         pollIntervalSeconds: interval,
         minVotes:            parseInt(minVotesEl.value,  10) || 0,
         maxSeenDeals:        parseInt(maxSeenEl.value,   10) || 500,
@@ -415,6 +468,7 @@ export function startWebServer({ port, getConfig, getMeta, onSettingsSaved }) {
         jsonResponse(res, 200, {
           appriseUrls:         config.appriseUrls,
           categories:          config.categories,
+          keywords:            config.keywords,
           pollIntervalSeconds: config.pollIntervalMs / 1000,
           minVotes:            config.minVotes,
           maxSeenDeals:        config.maxSeenDeals,

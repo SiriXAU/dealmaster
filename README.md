@@ -31,14 +31,13 @@ services:
     image: ghcr.io/sirixau/dealmaster:latest
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
+      - "${WEB_PORT:-8080}:8080"
     environment:
       - APPRISE_URLS=${APPRISE_URLS}
       - CATEGORIES=${CATEGORIES:-}
       - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-120}
       - MIN_VOTES=${MIN_VOTES:-0}
       - MAX_SEEN_DEALS=${MAX_SEEN_DEALS:-500}
-      - WEB_PORT=${WEB_PORT:-8080}
     healthcheck:
       test: ["CMD", "node", "-e", "try{const s=require('fs').statSync('/tmp/health');if(Date.now()-s.mtimeMs>600000)process.exit(1);}catch(e){process.exit(1);}"]
       interval: 60s
@@ -68,7 +67,7 @@ On first start, Dealmaster sends a notification for the most recent OzBargain de
 
 ## Web Settings Interface
 
-Dealmaster includes a built-in settings UI served on port 8080 (configurable via `WEB_PORT`). Open it in any browser — it works on desktop and mobile, and supports dark mode automatically.
+Dealmaster includes a built-in settings UI served on port 8080 inside the container. Open it in any browser — it works on desktop and mobile, and supports dark mode automatically.
 
 ![Settings UI showing notification URLs, category chips, polling and filtering controls](preview.html)
 
@@ -78,6 +77,7 @@ Dealmaster includes a built-in settings UI served on port 8080 (configurable via
 |---|---|
 | **Notification URLs** | Add, remove, or update Apprise notification URLs — one per line |
 | **Deal Categories** | Toggle OzBargain category chips or type custom filters |
+| **Keyword Filter** | Only notify for deals whose title, description, or store matches a keyword |
 | **Poll Interval** | How often to check OzBargain for new deals (minimum 30s) |
 | **Minimum Votes** | Only notify for deals with at least this many votes |
 | **Max Seen Deals** | Memory cap for the deduplication store |
@@ -108,12 +108,14 @@ podman run --rm -v dealmaster_dealmaster-data:/data alpine rm /data/settings.jso
 
 ### Changing the web UI port
 
+The container always listens on port **8080** internally. `WEB_PORT` controls which host port maps to it:
+
 ```
 # .env
 WEB_PORT=9000
 ```
 
-The `ports` binding in `docker-compose.yml` uses the same variable, so host and container ports stay in sync automatically.
+With the above set, the UI is accessible at `http://localhost:9000` on the host while the container still binds internally to 8080.
 
 ### Restricting access
 
@@ -134,11 +136,12 @@ These control initial configuration and serve as fallback values once the web UI
 |---|---|---|---|
 | `APPRISE_URLS` | **Yes** (first run) | — | Comma-separated list of Apprise notification URLs |
 | `CATEGORIES` | No | _(all)_ | Comma-separated category filter (see below) |
+| `KEYWORDS` | No | _(all)_ | Comma-separated keyword filter — matches title, description, and store name (see below) |
 | `POLL_INTERVAL_SECONDS` | No | `120` | Seconds between feed checks — minimum `30` |
 | `MIN_VOTES` | No | `0` | Minimum OzBargain vote count required to notify |
 | `MAX_SEEN_DEALS` | No | `500` | Maximum deal IDs to retain in the persistence store |
 | `DATA_DIR` | No | `/data` | Path for persistence files inside the container — not configurable via web UI |
-| `WEB_PORT` | No | `8080` | Port the web settings UI listens on |
+| `WEB_PORT` | No | `8080` | Host port mapped to the web settings UI (container always listens on 8080 internally) |
 
 `APPRISE_URLS` is required on the **first run only**. Once you've saved settings via the web UI, the container can start without it.
 
@@ -191,6 +194,50 @@ MIN_VOTES=5
 ```
 
 The same can be set (and changed live) via the web UI category chips.
+
+---
+
+## Keyword Filtering
+
+Set `KEYWORDS` (via env var or the web UI) to a comma-separated list of terms to only receive deals that mention at least one of those keywords. The match searches the deal's **title**, **description body**, and **store name** — case-insensitive substring.
+
+**Common use cases:**
+
+| Keyword | What it catches |
+|---|---|
+| `Free` | Free games, free items, free shipping deals |
+| `Steam` | Steam game sales and gifts |
+| `Epic Games` | Epic Games Store deals and freebies |
+| `PlayStation` | PS4/PS5 games, PlayStation Store deals |
+| `Xbox` | Xbox game sales, Game Pass deals |
+| `Nintendo` | Switch games and Nintendo eShop deals |
+| `Cashback` | Cashback deals and promotions |
+
+Leave `KEYWORDS` empty (the default) to receive all deals regardless of content.
+
+**How keywords interact with categories:**
+
+Both filters apply together — a deal must satisfy **all** active filters:
+
+```
+notify if:  matches_category  AND  matches_keyword  AND  meets_min_votes
+```
+
+So `CATEGORIES=Gaming` + `KEYWORDS=Free` will only notify for free deals in the Gaming category.
+
+**Example `.env` for free games across any platform:**
+```
+APPRISE_URLS=discord://YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN
+KEYWORDS=Free,Steam,Epic Games
+```
+
+**Example `.env` for cheap computing deals with decent votes:**
+```
+APPRISE_URLS=discord://YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN
+CATEGORIES=Computing
+KEYWORDS=SSD,GPU,CPU,RAM
+MIN_VOTES=10
+```
 
 ---
 

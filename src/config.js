@@ -36,6 +36,13 @@ export function loadConfig(savedSettings = null) {
         .map(c => c.trim())
         .filter(c => c.length > 0);
 
+  const keywords = Array.isArray(s.keywords)
+    ? s.keywords
+    : (process.env.KEYWORDS ?? '')
+        .split(',')
+        .map(k => k.trim())
+        .filter(k => k.length > 0);
+
   const minVotes     = s.minVotes     != null ? Number(s.minVotes)     : parseInt(process.env.MIN_VOTES      ?? '0',   10);
   const maxSeenDeals = s.maxSeenDeals != null ? Number(s.maxSeenDeals) : parseInt(process.env.MAX_SEEN_DEALS ?? '500', 10);
   const dataDir      = process.env.DATA_DIR ?? '/data';
@@ -43,6 +50,7 @@ export function loadConfig(savedSettings = null) {
   return Object.freeze({
     appriseUrls,
     categories,
+    keywords,
     pollIntervalMs: pollIntervalSeconds * 1000,
     minVotes:       isNaN(minVotes)     ? 0   : minVotes,
     maxSeenDeals:   isNaN(maxSeenDeals) ? 500 : maxSeenDeals,
