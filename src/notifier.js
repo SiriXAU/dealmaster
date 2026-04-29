@@ -75,7 +75,7 @@ async function sendDiscordEmbed(deal, webhookUrl) {
   const embed = buildEmbed(deal);
   const payload = {
     username: 'Dealmaster',
-    avatar_url: BRAND.iconUrl,
+    avatar_url: getBrand(deal.source).iconUrl,
     embeds: [embed],
   };
 
