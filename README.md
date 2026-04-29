@@ -2,7 +2,7 @@
 
 > **Personal project notice:** Dealmaster was vibe-coded for personal use. It scratches a specific itch — getting OzBargain deal notifications directly in a notification service without relying on third-party bots or services. It works well for that purpose and is shared here in case it's useful to others, but comes with no guarantees, SLAs, or formal support. Use at your own risk and feel free to fork and adapt it.
 
-Dealmaster monitors [OzBargain](https://www.ozbargain.com.au/deals) for new deals and sends notifications via [Apprise](https://github.com/caronc/apprise), supporting 100+ services (Discord, Slack, Telegram, email, and more). It runs as a self-contained container configured entirely via environment variables, with no database or external dependencies beyond the OzBargain RSS feed.
+Dealmaster monitors [OzBargain](https://www.ozbargain.com.au/deals) for new deals and sends notifications via [Apprise](https://github.com/caronc/apprise), supporting 100+ services (Discord, Slack, Telegram, email, and more). It runs as a self-contained container with a built-in web settings interface — configure everything through the browser, no container restart required.
 
 ---
 
@@ -11,6 +11,7 @@ Dealmaster monitors [OzBargain](https://www.ozbargain.com.au/deals) for new deal
 - Polls the OzBargain RSS feed on a configurable interval
 - Sends notifications via Apprise to any supported service (Discord, Slack, Telegram, email, and more)
 - Discord URLs receive **rich embeds** — coloured card with price, store, delivery method, category, votes, author, expiry, thumbnail, and timestamp
+- **Web settings UI** — change any setting live at `http://localhost:8080`, dark mode and mobile-friendly
 - Category and minimum-vote filtering to reduce noise
 - Startup heartbeat — sends a notification for the most recent deal on launch so you know it's live
 - Persistent seen-deal tracking to prevent duplicate notifications across restarts
@@ -29,12 +30,15 @@ services:
   dealmaster:
     image: ghcr.io/sirixau/dealmaster:latest
     restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
     environment:
       - APPRISE_URLS=${APPRISE_URLS}
       - CATEGORIES=${CATEGORIES:-}
       - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-120}
       - MIN_VOTES=${MIN_VOTES:-0}
       - MAX_SEEN_DEALS=${MAX_SEEN_DEALS:-500}
+      - WEB_PORT=${WEB_PORT:-8080}
     healthcheck:
       test: ["CMD", "node", "-e", "try{const s=require('fs').statSync('/tmp/health');if(Date.now()-s.mtimeMs>600000)process.exit(1);}catch(e){process.exit(1);}"]
       interval: 60s
@@ -58,20 +62,85 @@ Then start it:
 podman-compose up -d        # or: docker compose up -d
 ```
 
-On first start, Dealmaster sends a notification for the most recent OzBargain deal so you know it's live, then begins watching for new ones.
+On first start, Dealmaster sends a notification for the most recent OzBargain deal so you know it's live, then begins watching for new ones. Open **http://localhost:8080** to configure settings via the web interface.
+
+---
+
+## Web Settings Interface
+
+Dealmaster includes a built-in settings UI served on port 8080 (configurable via `WEB_PORT`). Open it in any browser — it works on desktop and mobile, and supports dark mode automatically.
+
+![Settings UI showing notification URLs, category chips, polling and filtering controls](preview.html)
+
+### What you can configure
+
+| Setting | Description |
+|---|---|
+| **Notification URLs** | Add, remove, or update Apprise notification URLs — one per line |
+| **Deal Categories** | Toggle OzBargain category chips or type custom filters |
+| **Poll Interval** | How often to check OzBargain for new deals (minimum 30s) |
+| **Minimum Votes** | Only notify for deals with at least this many votes |
+| **Max Seen Deals** | Memory cap for the deduplication store |
+
+Changes take effect **immediately** — the poll loop restarts with the new settings without restarting the container.
+
+### Settings persistence
+
+When you save via the web UI, settings are written to `$DATA_DIR/settings.json` (inside the data volume). On subsequent container restarts, this file takes precedence over all environment variables.
+
+| Situation | Config source |
+|---|---|
+| First run, no `settings.json` | Environment variables (`.env`) |
+| After first web UI save | `settings.json` — env vars are ignored |
+| `settings.json` deleted | Falls back to environment variables |
+
+> **Note:** If you update `.env` after saving via the web UI, the `.env` changes will be silently ignored — `settings.json` wins. To revert to env var values, delete `settings.json` from the data volume, or just update the values in the web UI instead.
+
+To delete `settings.json` and revert to env vars:
+```bash
+# With Docker
+docker exec <container-name> rm /data/settings.json
+
+# Or bring the stack down and edit the volume directly
+podman-compose down
+podman run --rm -v dealmaster_dealmaster-data:/data alpine rm /data/settings.json
+```
+
+### Changing the web UI port
+
+```
+# .env
+WEB_PORT=9000
+```
+
+The `ports` binding in `docker-compose.yml` uses the same variable, so host and container ports stay in sync automatically.
+
+### Restricting access
+
+The web UI has no authentication. If you're running Dealmaster on a server rather than locally, use a reverse proxy (nginx, Caddy, Traefik) to restrict access or add basic auth. Alternatively, remove the `ports` binding from `docker-compose.yml` and access the UI via an SSH tunnel:
+
+```bash
+ssh -L 8080:localhost:8080 your-server
+# then open http://localhost:8080
+```
 
 ---
 
 ## Environment Variables
 
+These control initial configuration and serve as fallback values once the web UI has been used to save settings.
+
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `APPRISE_URLS` | **Yes** | — | Comma-separated list of Apprise notification URLs |
+| `APPRISE_URLS` | **Yes** (first run) | — | Comma-separated list of Apprise notification URLs |
 | `CATEGORIES` | No | _(all)_ | Comma-separated category filter (see below) |
 | `POLL_INTERVAL_SECONDS` | No | `120` | Seconds between feed checks — minimum `30` |
 | `MIN_VOTES` | No | `0` | Minimum OzBargain vote count required to notify |
 | `MAX_SEEN_DEALS` | No | `500` | Maximum deal IDs to retain in the persistence store |
-| `DATA_DIR` | No | `/data` | Path for the persistence file inside the container |
+| `DATA_DIR` | No | `/data` | Path for persistence files inside the container — not configurable via web UI |
+| `WEB_PORT` | No | `8080` | Port the web settings UI listens on |
+
+`APPRISE_URLS` is required on the **first run only**. Once you've saved settings via the web UI, the container can start without it.
 
 ### Configuring Apprise URLs
 
@@ -101,9 +170,9 @@ APPRISE_URLS=discord://id/token,slack://TokenA/TokenB/TokenC/Channel
 
 ## Category Filtering
 
-Set `CATEGORIES` to a comma-separated list of terms to only receive deals in matching categories. Matching is **case-insensitive and substring-based**, so a single term can match several OzBargain category names.
+Set `CATEGORIES` (via env var or the web UI) to a comma-separated list of terms to only receive deals in matching categories. Matching is **case-insensitive and substring-based**, so a single term can match several OzBargain category names.
 
-| `CATEGORIES` value | Example categories matched |
+| Filter term | Example categories matched |
 |---|---|
 | `Computing` | Computing, Consumer Electronics & Computers |
 | `Gaming` | Gaming, PC Gaming |
@@ -112,7 +181,7 @@ Set `CATEGORIES` to a comma-separated list of terms to only receive deals in mat
 | `Home` | Home & Garden, Home Appliances |
 | `Electrical` | Electrical & Electronics |
 
-Leave `CATEGORIES` empty (the default) to receive all categories.
+Leave categories empty to receive all categories.
 
 **Example `.env` for computing and gaming deals only:**
 ```
@@ -121,16 +190,20 @@ CATEGORIES=Computing,Gaming
 MIN_VOTES=5
 ```
 
+The same can be set (and changed live) via the web UI category chips.
+
 ---
 
 ## Startup Behaviour
 
 On every start Dealmaster:
 
-1. Fetches the current OzBargain feed
-2. Sends a notification for the single most recent (filtered) deal as a liveness signal
-3. Marks all current feed items as seen
-4. Enters the regular poll loop
+1. Loads configuration from `settings.json` (if it exists) or environment variables
+2. Starts the web settings UI
+3. Fetches the current OzBargain feed
+4. Sends a notification for the single most recent (filtered) deal as a liveness signal
+5. Marks all current feed items as seen
+6. Enters the regular poll loop
 
 This means you always receive a startup notification confirming the tool is running, and the first real poll will only notify on deals that appear *after* that point.
 
@@ -138,11 +211,16 @@ This means you always receive a startup notification confirming the tool is runn
 
 ## Persistence
 
-Seen deal IDs are stored in `$DATA_DIR/seen-deals.json` (default: `/data/seen-deals.json`). The named volume in `docker-compose.yml` persists this file across container restarts, preventing duplicate notifications.
+Two files are stored in `$DATA_DIR` (default `/data`), persisted via the named Docker volume:
 
-The store is capped at `MAX_SEEN_DEALS` entries (default: `500`). When the cap is reached, the oldest entries are trimmed. With a 2-minute poll interval and typical OzBargain posting volume this is more than enough to prevent duplicates indefinitely.
+| File | Purpose |
+|---|---|
+| `seen-deals.json` | Set of deal IDs already notified — prevents duplicates across restarts |
+| `settings.json` | Settings saved via the web UI — takes precedence over env vars on startup |
 
-**Resetting state** (to re-notify on all current deals):
+The seen-deal store is capped at `MAX_SEEN_DEALS` entries (default: `500`). When the cap is reached, the oldest entries are trimmed. With a 2-minute poll interval and typical OzBargain posting volume this is more than enough to prevent duplicates indefinitely.
+
+**Resetting seen deals** (to re-notify on all current deals):
 ```bash
 podman-compose down
 podman volume rm <project-directory>_dealmaster-data
@@ -172,45 +250,48 @@ Possible statuses: `starting` (within the 30s start period), `healthy`, `unhealt
 ## How It Works
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                     index.js                        │
-│  Loads config → registers shutdown handlers         │
-│  → calls startMonitor()                             │
-└──────────────────────┬──────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────┐
-│                   monitor.js                        │
-│  startMonitor()  — startup heartbeat deal + seed    │
-│  runOnce()       — fetch → filter → diff → notify  │
-│                    → persist → touch /tmp/health    │
-└──────┬────────────────────────────────┬─────────────┘
-       │                                │
-┌──────▼───────┐               ┌────────▼──────────────┐
-│  fetcher.js  │               │     notifier.js        │
-│  OzBargain   │               │  Apprise CLI           │
-│  RSS → deals │               │  notification sender   │
-└──────────────┘               └────────────────────────┘
-       │
-┌──────▼───────┐
-│  filter.js   │
-│  category +  │
-│  vote filter │
-└──────────────┘
-       │
-┌──────▼───────┐
-│   store.js   │
-│  seen-deals  │
-│  .json R/W   │
-└──────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                          index.js                            │
+│  Loads settings.json → loadConfig() → registers shutdown     │
+│  → startWebServer() → startMonitor()                         │
+└──────────┬────────────────────────────────┬──────────────────┘
+           │                                │
+┌──────────▼───────────┐        ┌───────────▼──────────────────┐
+│      web.js          │        │         monitor.js            │
+│  GET /               │        │  startMonitor() — heartbeat   │
+│  GET /api/settings   │        │  + seed on startup            │
+│  POST /api/settings  │        │  startPollLoop() — interval   │
+│  → restarts poll     │        │  runOnce() — fetch→filter     │
+│    loop on save      │        │  →diff→notify→persist→health  │
+└──────────┬───────────┘        └──────┬────────────────────────┘
+           │                           │
+┌──────────▼───────────┐     ┌─────────▼──────┐  ┌─────────────────┐
+│     settings.js      │     │   fetcher.js   │  │   notifier.js   │
+│  load/save           │     │  OzBargain RSS │  │  Apprise CLI /  │
+│  settings.json       │     │  → deals       │  │  Discord embed  │
+└──────────────────────┘     └─────────┬──────┘  └─────────────────┘
+                                       │
+                             ┌─────────▼──────┐
+                             │   filter.js    │
+                             │  category +    │
+                             │  vote filter   │
+                             └─────────┬──────┘
+                                       │
+                             ┌─────────▼──────┐
+                             │    store.js    │
+                             │  seen-deals    │
+                             │  .json R/W     │
+                             └────────────────┘
 ```
 
-1. `index.js` loads and validates configuration from environment variables, registers `SIGTERM`/`SIGINT` handlers, and calls `startMonitor()`
-2. On startup, `monitor.js` fetches the current feed, sends a startup notification, marks everything as seen, then enters the poll loop
+1. `index.js` loads `settings.json` (if present) then builds config, starts the web UI, registers shutdown handlers, and calls `startMonitor()`
+2. On startup, `monitor.js` fetches the current feed, sends a startup notification, marks everything as seen, then starts the poll interval
 3. On each poll, `fetcher.js` fetches and parses the OzBargain RSS feed, normalising each item into a consistent deal shape
 4. `filter.js` applies the category whitelist and minimum vote threshold
 5. `store.js` loads the persisted set of seen deal IDs and filters out already-seen deals
-6. `notifier.js` calls the Apprise CLI to send a notification to all configured URLs for each new deal
+6. `notifier.js` calls the Apprise CLI (or Discord webhook directly) to send a notification for each new deal
 7. Updated seen IDs are written back to disk and `/tmp/health` is touched
+8. When settings are saved via the web UI, `settings.js` validates and writes `settings.json`, the config is rebuilt, and the poll interval restarts with the new settings — no container restart needed
 
 ---
 
@@ -218,16 +299,18 @@ Possible statuses: `starting` (within the 30s start period), `healthy`, `unhealt
 
 ```
 dealmaster/
-├── index.js              # Entry point — config, shutdown handlers, start
+├── index.js              # Entry point — load settings, start web UI + monitor
 ├── src/
-│   ├── config.js         # Environment variable loading and validation
+│   ├── config.js         # Config loading — settings.json → env var → default
+│   ├── settings.js       # Load/save settings.json with validation
+│   ├── web.js            # HTTP settings UI (port 8080) and /api/settings routes
 │   ├── fetcher.js        # OzBargain RSS fetch and normalisation
 │   ├── filter.js         # Category and vote filtering
 │   ├── monitor.js        # Poll loop, startup heartbeat, health file
-│   ├── notifier.js       # Apprise CLI notification sender
+│   ├── notifier.js       # Apprise CLI + Discord embed notification sender
 │   └── store.js          # Seen-deal ID persistence (JSON on disk)
 ├── Dockerfile            # node:22-alpine image with Python3 + apprise
-├── docker-compose.yml    # Compose definition with healthcheck
+├── docker-compose.yml    # Compose definition with healthcheck and web port
 └── .env.example          # Environment variable template
 ```
 
