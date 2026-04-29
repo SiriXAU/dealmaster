@@ -26,8 +26,8 @@ const genericParser = new Parser({
 const OZB_FEED_URL = 'https://www.ozbargain.com.au/deals/feed';
 
 export const GAMING_FEED_URLS = {
-  gameDeals:  'https://game-deals.app/rss',
-  gamerpower: 'https://gamerpower.com/rss',
+  gameDeals:  'https://game-deals.app/rss/all',
+  gamerpower: 'https://www.gamerpower.com/rss/giveaways',
   epicbundle: 'https://epicbundle.com/feed',
 };
 
@@ -47,7 +47,15 @@ export async function fetchDeals() {
 
 async function fetchGamingSource(sourceId, url) {
   try {
-    const feed = await genericParser.parseURL(url);
+    let feed;
+    if (sourceId === 'gamerpower') {
+      // Gamerpower RSS embeds HTML with boolean attributes (e.g. `<img loading>`)
+      // which are invalid XML. Fetch raw and sanitize before parsing.
+      const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+      feed = await genericParser.parseString(sanitizeXml(await res.text()));
+    } else {
+      feed = await genericParser.parseURL(url);
+    }
     return feed.items.map(item => normalizeGamingItem(item, sourceId));
   } catch (err) {
     console.error(`[fetcher] Failed to fetch ${sourceId} feed: ${err.message}`);
@@ -195,6 +203,16 @@ function normalizeGamingItem(item, sourceId) {
     type:        GAMING_SOURCE_TYPE[sourceId] ?? 'Deal',
     source:      sourceId,
   };
+}
+
+/**
+ * Converts HTML-style boolean attributes (no value) to XML-compliant form.
+ * e.g. `<img loading>` → `<img loading="">` so strict XML parsers don't choke.
+ */
+function sanitizeXml(xml) {
+  return xml.replace(/<[^>]+>/g, tag =>
+    tag.replace(/(\s[a-zA-Z][a-zA-Z0-9_:-]*)(?!=)/g, '$1=""')
+  );
 }
 
 /**
