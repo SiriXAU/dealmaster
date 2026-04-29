@@ -33,8 +33,26 @@
     .save-btn:hover  { background: #e65c00; }
     .save-btn:active { background: #cc5200; }
 
-    /* number input spinner styling */
     input[type=number]::-webkit-inner-spin-button { opacity: 0.4; }
+
+    /* Chip colours — CSS owns dark mode, JS only sets data-active */
+    [data-chip][data-active="true"] {
+      background: #FF6600;
+      color: #fff;
+      border-color: #FF6600;
+    }
+    [data-chip][data-active="false"] {
+      background: #fff;
+      color: #3f3f46;
+      border-color: #e4e4e7;
+    }
+    @media (prefers-color-scheme: dark) {
+      [data-chip][data-active="false"] {
+        background: #3f3f46;
+        color: #d4d4d8;
+        border-color: #52525b;
+      }
+    }
   </style>
 </head>
 <body class="min-h-screen font-sans text-zinc-900 dark:text-zinc-100 antialiased">
@@ -203,14 +221,6 @@
   <script>
     const chipsEl   = document.getElementById('chips');
     const textInput = document.getElementById('categories-input');
-    const darkMQ    = window.matchMedia('(prefers-color-scheme: dark)');
-
-    function chipColors(active) {
-      const dark = darkMQ.matches;
-      if (active)  return { background: '#FF6600', color: '#fff',     borderColor: '#FF6600' };
-      if (dark)    return { background: '#3f3f46', color: '#d4d4d8',  borderColor: '#52525b' };
-                   return { background: '#fff',    color: '#3f3f46',  borderColor: '#e4e4e7' };
-    }
 
     function getSelected() {
       return new Set(
@@ -218,30 +228,20 @@
       );
     }
 
-    function applyStyle(chip, active) {
-      const s = chipColors(active);
-      chip.style.background  = s.background;
-      chip.style.color       = s.color;
-      chip.style.borderColor = s.borderColor;
-    }
-
+    // Only sets data-active — CSS handles all colour logic including dark mode
     function renderChips() {
       const selected = getSelected();
-      chipsEl.querySelectorAll('[data-chip]').forEach(chip =>
-        applyStyle(chip, selected.has(chip.dataset.chip.toLowerCase()))
-      );
+      chipsEl.querySelectorAll('[data-chip]').forEach(chip => {
+        chip.dataset.active = selected.has(chip.dataset.chip.toLowerCase()) ? 'true' : 'false';
+      });
     }
 
-    // Re-render when system theme changes so inactive chips update immediately
-    darkMQ.addEventListener('change', renderChips);
-
-    // Event delegation — one listener on the container
     chipsEl.addEventListener('click', function(e) {
       const chip = e.target.closest('[data-chip]');
       if (!chip) return;
-      const label  = chip.dataset.chip;
-      let values   = textInput.value.split(',').map(v => v.trim()).filter(Boolean);
-      const idx    = values.findIndex(v => v.toLowerCase() === label.toLowerCase());
+      const label = chip.dataset.chip;
+      let values  = textInput.value.split(',').map(v => v.trim()).filter(Boolean);
+      const idx   = values.findIndex(v => v.toLowerCase() === label.toLowerCase());
       if (idx === -1) values.push(label); else values.splice(idx, 1);
       textInput.value = values.join(', ');
       renderChips();
