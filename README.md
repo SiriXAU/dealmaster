@@ -12,7 +12,7 @@ Dealmaster monitors [OzBargain](https://www.ozbargain.com.au/deals) for new deal
 - Sends notifications via Apprise to any supported service (Discord, Slack, Telegram, email, and more)
 - Discord URLs receive **rich embeds** — coloured card with price, store, delivery method, category, votes, author, expiry, thumbnail, and timestamp
 - **Web settings UI** — change any setting live at `http://localhost:8080`, dark mode and mobile-friendly
-- Category and minimum-vote filtering to reduce noise
+- Category, keyword, and minimum-vote filtering to reduce noise
 - Startup heartbeat — sends a notification for the most recent deal on launch so you know it's live
 - Persistent seen-deal tracking to prevent duplicate notifications across restarts
 - Graceful shutdown on `SIGTERM`/`SIGINT` (plays well with `podman-compose down`)
@@ -35,6 +35,7 @@ services:
     environment:
       - APPRISE_URLS=${APPRISE_URLS}
       - CATEGORIES=${CATEGORIES:-}
+      - KEYWORDS=${KEYWORDS:-}
       - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-120}
       - MIN_VOTES=${MIN_VOTES:-0}
       - MAX_SEEN_DEALS=${MAX_SEEN_DEALS:-500}
@@ -321,6 +322,7 @@ Possible statuses: `starting` (within the 30s start period), `healthy`, `unhealt
                              ┌─────────▼──────┐
                              │   filter.js    │
                              │  category +    │
+                             │  keyword +     │
                              │  vote filter   │
                              └─────────┬──────┘
                                        │
@@ -334,7 +336,7 @@ Possible statuses: `starting` (within the 30s start period), `healthy`, `unhealt
 1. `index.js` loads `settings.json` (if present) then builds config, starts the web UI, registers shutdown handlers, and calls `startMonitor()`
 2. On startup, `monitor.js` fetches the current feed, sends a startup notification, marks everything as seen, then starts the poll interval
 3. On each poll, `fetcher.js` fetches and parses the OzBargain RSS feed, normalising each item into a consistent deal shape
-4. `filter.js` applies the category whitelist and minimum vote threshold
+4. `filter.js` applies the category whitelist, keyword filter, and minimum vote threshold
 5. `store.js` loads the persisted set of seen deal IDs and filters out already-seen deals
 6. `notifier.js` calls the Apprise CLI (or Discord webhook directly) to send a notification for each new deal
 7. Updated seen IDs are written back to disk and `/tmp/health` is touched
@@ -352,7 +354,7 @@ dealmaster/
 │   ├── settings.js       # Load/save settings.json with validation
 │   ├── web.js            # HTTP settings UI (port 8080) and /api/settings routes
 │   ├── fetcher.js        # OzBargain RSS fetch and normalisation
-│   ├── filter.js         # Category and vote filtering
+│   ├── filter.js         # Category, keyword, and vote filtering
 │   ├── monitor.js        # Poll loop, startup heartbeat, health file
 │   ├── notifier.js       # Apprise CLI + Discord embed notification sender
 │   └── store.js          # Seen-deal ID persistence (JSON on disk)
