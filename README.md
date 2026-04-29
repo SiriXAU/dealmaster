@@ -2,17 +2,25 @@
 
 > **Personal project notice:** Dealmaster was vibe-coded for personal use. It scratches a specific itch — getting OzBargain deal notifications directly in a notification service without relying on third-party bots or services. It works well for that purpose and is shared here in case it's useful to others, but comes with no guarantees, SLAs, or formal support. Use at your own risk and feel free to fork and adapt it.
 
-Dealmaster monitors [OzBargain](https://www.ozbargain.com.au/deals) for new deals and sends notifications via [Apprise](https://github.com/caronc/apprise), supporting 100+ services (Discord, Slack, Telegram, email, and more). It runs as a self-contained container with a built-in web settings interface — configure everything through the browser, no container restart required.
+Dealmaster monitors deal feeds and sends notifications via [Apprise](https://github.com/caronc/apprise), supporting 100+ services (Discord, Slack, Telegram, email, and more). It runs as a self-contained container with a built-in web settings interface — configure everything through the browser, no container restart required.
+
+**Primary source:** [OzBargain](https://www.ozbargain.com.au/deals) — community deal posts with votes, categories, and store info.
+
+**Optional gaming sources** (each independently toggled on/off):
+- [game-deals.app](https://game-deals.app) — all game deals, sales, and discounts
+- [GamerPower](https://gamerpower.com) — free game giveaways and freebies
+- [EpicBundle](https://epicbundle.com) — game bundles and big promotional offers
 
 ---
 
 ## Features
 
 - Polls the OzBargain RSS feed on a configurable interval
+- **Optional gaming sources** — Game Deals, GamerPower, and EpicBundle can each be toggled on/off independently from the web UI or via env vars
 - Sends notifications via Apprise to any supported service (Discord, Slack, Telegram, email, and more)
-- Discord URLs receive **rich embeds** — coloured card with price, store, delivery method, category, votes, author, expiry, thumbnail, and timestamp
+- Discord URLs receive **rich embeds** — coloured card with source-specific branding, price, store, category, and relevant metadata
 - **Web settings UI** — change any setting live at `http://localhost:8080`, dark mode and mobile-friendly
-- Category, keyword, and minimum-vote filtering to reduce noise
+- Category, keyword, and minimum-vote filtering to reduce noise (gaming sources bypass the vote threshold since they don't use a voting system)
 - Startup heartbeat — sends a notification for the most recent deal on launch so you know it's live
 - Persistent seen-deal tracking to prevent duplicate notifications across restarts
 - Graceful shutdown on `SIGTERM`/`SIGINT` (plays well with `podman-compose down`)
@@ -39,6 +47,10 @@ services:
       - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-120}
       - MIN_VOTES=${MIN_VOTES:-0}
       - MAX_SEEN_DEALS=${MAX_SEEN_DEALS:-500}
+      # Optional gaming sources — remove or set to false to disable
+      - GAMING_DEALS_ENABLED=${GAMING_DEALS_ENABLED:-false}
+      - GAMERPOWER_ENABLED=${GAMERPOWER_ENABLED:-false}
+      - EPICBUNDLE_ENABLED=${EPICBUNDLE_ENABLED:-false}
     healthcheck:
       test: ["CMD", "node", "-e", "try{const s=require('fs').statSync('/tmp/health');if(Date.now()-s.mtimeMs>600000)process.exit(1);}catch(e){process.exit(1);}"]
       interval: 60s
@@ -79,9 +91,10 @@ Dealmaster includes a built-in settings UI served on port 8080 inside the contai
 | **Notification URLs** | Add, remove, or update Apprise notification URLs — one per line |
 | **Deal Categories** | Toggle OzBargain category chips or type custom filters |
 | **Keyword Filter** | Only notify for deals whose title, description, or store matches a keyword |
-| **Poll Interval** | How often to check OzBargain for new deals (minimum 30s) |
-| **Minimum Votes** | Only notify for deals with at least this many votes |
+| **Poll Interval** | How often to check all enabled feeds for new deals (minimum 30s) |
+| **Minimum Votes** | Only notify for OzBargain deals with at least this many votes (gaming sources are unaffected) |
 | **Max Seen Deals** | Memory cap for the deduplication store |
+| **Gaming Sources** | Toggle Game Deals, GamerPower, and EpicBundle on/off independently |
 
 Changes take effect **immediately** — the poll loop restarts with the new settings without restarting the container.
 
@@ -139,8 +152,11 @@ These control initial configuration and serve as fallback values once the web UI
 | `CATEGORIES` | No | _(all)_ | Comma-separated category filter (see below) |
 | `KEYWORDS` | No | _(all)_ | Comma-separated keyword filter — matches title, description, and store name (see below) |
 | `POLL_INTERVAL_SECONDS` | No | `120` | Seconds between feed checks — minimum `30` |
-| `MIN_VOTES` | No | `0` | Minimum OzBargain vote count required to notify |
+| `MIN_VOTES` | No | `0` | Minimum OzBargain vote count required to notify (does not affect gaming sources) |
 | `MAX_SEEN_DEALS` | No | `500` | Maximum deal IDs to retain in the persistence store |
+| `GAMING_DEALS_ENABLED` | No | `false` | Set to `true` to enable the game-deals.app feed |
+| `GAMERPOWER_ENABLED` | No | `false` | Set to `true` to enable the GamerPower freebies feed |
+| `EPICBUNDLE_ENABLED` | No | `false` | Set to `true` to enable the EpicBundle feed |
 | `DATA_DIR` | No | `/data` | Path for persistence files inside the container — not configurable via web UI |
 | `WEB_PORT` | No | `8080` | Host port mapped to the web settings UI (container always listens on 8080 internally) |
 
@@ -242,14 +258,60 @@ MIN_VOTES=10
 
 ---
 
+## Gaming Sources
+
+Three optional gaming deal feeds can be enabled independently — from the web UI (Gaming Sources card) or via environment variables. All are disabled by default and have no effect on OzBargain behaviour when off.
+
+| Source | Feed URL | Deal type | Discord colour |
+|---|---|---|---|
+| **Game Deals** | `game-deals.app/rss` | All game deals, sales & discounts | Green |
+| **GamerPower** | `gamerpower.com/rss` | Free game giveaways & freebies | Red |
+| **EpicBundle** | `epicbundle.com/feed` | Game bundles & big promos | Purple |
+
+### How gaming deals differ from OzBargain
+
+| | OzBargain | Gaming sources |
+|---|---|---|
+| Votes | Community up/down vote count | Not applicable — always 0 |
+| Minimum votes filter | Applied | Skipped (gaming deals always pass) |
+| Discord embed fields | Price · Store · Delivery / Category · Votes · Posted by | Price · Store · Category / Type · Source · Posted |
+| Embed branding | OzBargain orange | Source-specific colour and icon |
+| Expiry | Shown when available | Not provided |
+| Delivery method | Shown when present in title | Not applicable |
+
+### Enabling via env var
+
+```
+# .env
+GAMING_DEALS_ENABLED=true
+GAMERPOWER_ENABLED=true
+EPICBUNDLE_ENABLED=true
+```
+
+### Enabling via web UI
+
+Open `http://localhost:8080`, scroll to the **Gaming Sources** card, and toggle the sources you want. Click **Save settings** — the poll loop restarts immediately and the new sources are included in the next cycle.
+
+### Filtering with gaming sources active
+
+- **Categories** — applies to gaming sources using the category field from each feed. Leave blank to receive all.
+- **Keywords** — applies to gaming sources normally; useful for filtering by game name or platform.
+- **Minimum votes** — ignored for gaming sources (they carry no vote data). Set it freely for OzBargain quality control without affecting gaming feeds.
+
+### Startup behaviour with gaming sources
+
+On startup, Dealmaster fetches all enabled sources in parallel and seeds their current items as seen — the same way it handles OzBargain. Only one startup notification is sent (the most recent deal across all enabled sources) to avoid flooding your channel.
+
+---
+
 ## Startup Behaviour
 
 On every start Dealmaster:
 
 1. Loads configuration from `settings.json` (if it exists) or environment variables
 2. Starts the web settings UI
-3. Fetches the current OzBargain feed
-4. Sends a notification for the single most recent (filtered) deal as a liveness signal
+3. Fetches the current feed from OzBargain and any enabled gaming sources (in parallel)
+4. Sends a notification for the single most recent (filtered) deal across all sources as a liveness signal
 5. Marks all current feed items as seen
 6. Enters the regular poll loop
 
@@ -313,17 +375,22 @@ Possible statuses: `starting` (within the 30s start period), `healthy`, `unhealt
 │    loop on save      │        │  →diff→notify→persist→health  │
 └──────────┬───────────┘        └──────┬────────────────────────┘
            │                           │
-┌──────────▼───────────┐     ┌─────────▼──────┐  ┌─────────────────┐
-│     settings.js      │     │   fetcher.js   │  │   notifier.js   │
-│  load/save           │     │  OzBargain RSS │  │  Apprise CLI /  │
-│  settings.json       │     │  → deals       │  │  Discord embed  │
-└──────────────────────┘     └─────────┬──────┘  └─────────────────┘
-                                       │
+┌──────────▼───────────┐     ┌─────────▼──────────────────────┐  ┌─────────────────┐
+│     settings.js      │     │          fetcher.js             │  │   notifier.js   │
+│  load/save           │     │  fetchAllDeals(config)          │  │  Apprise CLI /  │
+│  settings.json       │     │  ├─ OzBargain RSS (always)      │  │  Discord embed  │
+└──────────────────────┘     │  ├─ game-deals.app (if enabled) │  │  (per-source    │
+                             │  ├─ gamerpower.com  (if enabled) │  │   branding)     │
+                             │  └─ epicbundle.com  (if enabled) │  └─────────────────┘
+                             └─────────┬──────────────────────┘
+                                       │ parallel fetch, flat array
                              ┌─────────▼──────┐
                              │   filter.js    │
                              │  category +    │
                              │  keyword +     │
                              │  vote filter   │
+                             │  (votes skipped│
+                             │  for gaming)   │
                              └─────────┬──────┘
                                        │
                              ┌─────────▼──────┐
@@ -334,11 +401,11 @@ Possible statuses: `starting` (within the 30s start period), `healthy`, `unhealt
 ```
 
 1. `index.js` loads `settings.json` (if present) then builds config, starts the web UI, registers shutdown handlers, and calls `startMonitor()`
-2. On startup, `monitor.js` fetches the current feed, sends a startup notification, marks everything as seen, then starts the poll interval
-3. On each poll, `fetcher.js` fetches and parses the OzBargain RSS feed, normalising each item into a consistent deal shape
-4. `filter.js` applies the category whitelist, keyword filter, and minimum vote threshold
+2. On startup, `monitor.js` fetches all enabled sources, sends a startup notification for the most recent deal, marks everything as seen, then starts the poll interval
+3. On each poll, `fetcher.js` calls `fetchAllDeals(config)` which fetches OzBargain plus any enabled gaming sources **in parallel**, normalising each item into a consistent deal shape. Gaming items carry a `type` field (`Freebie`, `Bundle`, or `Deal`) and `votes: 0`
+4. `filter.js` applies the category whitelist and keyword filter to all sources; the minimum vote threshold is only applied to OzBargain deals
 5. `store.js` loads the persisted set of seen deal IDs and filters out already-seen deals
-6. `notifier.js` calls the Apprise CLI (or Discord webhook directly) to send a notification for each new deal
+6. `notifier.js` sends a notification for each new deal — Discord embeds use per-source branding and a layout adapted to the available fields; all other URLs use the Apprise CLI
 7. Updated seen IDs are written back to disk and `/tmp/health` is touched
 8. When settings are saved via the web UI, `settings.js` validates and writes `settings.json`, the config is rebuilt, and the poll interval restarts with the new settings — no container restart needed
 
@@ -369,6 +436,6 @@ dealmaster/
 
 - **Runtime:** Docker or Podman with Compose support (`docker compose` / `podman-compose`)
 - **Notifications:** An Apprise-compatible notification service (Discord, Slack, Telegram, email, etc.)
-- **Network:** Outbound HTTPS to `www.ozbargain.com.au` and your notification service endpoint(s)
+- **Network:** Outbound HTTPS to `www.ozbargain.com.au` and your notification service endpoint(s). When gaming sources are enabled, also requires outbound HTTPS to `game-deals.app`, `gamerpower.com`, and/or `epicbundle.com`
 
 No accounts, API keys, or external services beyond the above are required.
