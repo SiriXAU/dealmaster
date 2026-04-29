@@ -26,9 +26,11 @@ const genericParser = new Parser({
 const OZB_FEED_URL = 'https://www.ozbargain.com.au/deals/feed';
 
 export const GAMING_FEED_URLS = {
-  gameDeals:  'https://game-deals.app/rss/all',
-  gamerpower: 'https://www.gamerpower.com/rss/giveaways',
-  epicbundle: 'https://epicbundle.com/feed',
+  gameDeals:       'https://game-deals.app/rss/all',
+  gamerpower:      'https://www.gamerpower.com/rss/giveaways',
+  gamerpowerGames: 'https://www.gamerpower.com/rss/games',
+  gamerpowerLoot:  'https://www.gamerpower.com/rss/loot',
+  epicbundle:      'https://epicbundle.com/feed',
 };
 
 /**
@@ -48,7 +50,7 @@ export async function fetchDeals() {
 async function fetchGamingSource(sourceId, url) {
   try {
     let feed;
-    if (sourceId === 'gamerpower') {
+    if (sourceId.startsWith('gamerpower')) {
       // Gamerpower RSS embeds HTML with boolean attributes (e.g. `<img loading>`)
       // which are invalid XML. Fetch raw and sanitize before parsing.
       const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
@@ -72,9 +74,11 @@ async function fetchGamingSource(sourceId, url) {
 export async function fetchAllDeals(config) {
   const { gamingSources = {} } = config;
   const tasks = [fetchDeals()];
-  if (gamingSources.gameDeals)  tasks.push(fetchGamingSource('game-deals', GAMING_FEED_URLS.gameDeals));
-  if (gamingSources.gamerpower) tasks.push(fetchGamingSource('gamerpower', GAMING_FEED_URLS.gamerpower));
-  if (gamingSources.epicbundle) tasks.push(fetchGamingSource('epicbundle', GAMING_FEED_URLS.epicbundle));
+  if (gamingSources.gameDeals)       tasks.push(fetchGamingSource('game-deals',      GAMING_FEED_URLS.gameDeals));
+  if (gamingSources.gamerpower)      tasks.push(fetchGamingSource('gamerpower',       GAMING_FEED_URLS.gamerpower));
+  if (gamingSources.gamerpowerGames) tasks.push(fetchGamingSource('gamerpower-games', GAMING_FEED_URLS.gamerpowerGames));
+  if (gamingSources.gamerpowerLoot)  tasks.push(fetchGamingSource('gamerpower-loot',  GAMING_FEED_URLS.gamerpowerLoot));
+  if (gamingSources.epicbundle)      tasks.push(fetchGamingSource('epicbundle',        GAMING_FEED_URLS.epicbundle));
   const results = await Promise.all(tasks);
   return results.flat();
 }
@@ -158,9 +162,11 @@ function normalizeOzbItem(item) {
 // ── Gaming source helpers ─────────────────────────────────────────────────────
 
 const GAMING_SOURCE_TYPE = {
-  'game-deals': 'Deal',
-  gamerpower:   'Freebie',
-  epicbundle:   'Bundle',
+  'game-deals':      'Deal',
+  gamerpower:        'Freebie',
+  'gamerpower-games': 'Freebie',
+  'gamerpower-loot':  'Freebie',
+  epicbundle:        'Bundle',
 };
 
 function extractMediaUrl(item) {
@@ -196,7 +202,7 @@ function normalizeGamingItem(item, sourceId) {
     votes:       0,
     imageUrl:    extractMediaUrl(item),
     author:      item.creator ?? item['dc:creator'] ?? null,
-    price:       extractPriceFromTitle(title) ?? (sourceId === 'gamerpower' ? 'Free' : null),
+    price:       extractPriceFromTitle(title) ?? (sourceId.startsWith('gamerpower') ? 'Free' : null),
     expiry:      null,
     store:       extractStore(title),
     delivery:    null,

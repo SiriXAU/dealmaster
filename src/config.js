@@ -49,9 +49,11 @@ export function loadConfig(savedSettings = null) {
 
   const gs = s.gamingSources ?? {};
   const gamingSources = Object.freeze({
-    gameDeals:  gs.gameDeals  != null ? Boolean(gs.gameDeals)  : (process.env.GAMING_DEALS_ENABLED === 'true'),
-    gamerpower: gs.gamerpower != null ? Boolean(gs.gamerpower) : (process.env.GAMERPOWER_ENABLED   === 'true'),
-    epicbundle: gs.epicbundle != null ? Boolean(gs.epicbundle) : (process.env.EPICBUNDLE_ENABLED   === 'true'),
+    gameDeals:       gs.gameDeals       != null ? Boolean(gs.gameDeals)       : (process.env.GAMING_DEALS_ENABLED      === 'true'),
+    gamerpower:      gs.gamerpower      != null ? Boolean(gs.gamerpower)      : (process.env.GAMERPOWER_ENABLED        === 'true'),
+    gamerpowerGames: gs.gamerpowerGames != null ? Boolean(gs.gamerpowerGames) : (process.env.GAMERPOWER_GAMES_ENABLED  === 'true'),
+    gamerpowerLoot:  gs.gamerpowerLoot  != null ? Boolean(gs.gamerpowerLoot)  : (process.env.GAMERPOWER_LOOT_ENABLED   === 'true'),
+    epicbundle:      gs.epicbundle      != null ? Boolean(gs.epicbundle)      : (process.env.EPICBUNDLE_ENABLED        === 'true'),
   });
 
   return Object.freeze({

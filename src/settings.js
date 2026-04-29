@@ -52,9 +52,11 @@ export async function saveSettings(dataDir, settings) {
     minVotes:            Number(settings.minVotes),
     maxSeenDeals:        Number(settings.maxSeenDeals),
     gamingSources: {
-      gameDeals:  Boolean(gs.gameDeals),
-      gamerpower: Boolean(gs.gamerpower),
-      epicbundle: Boolean(gs.epicbundle),
+      gameDeals:       Boolean(gs.gameDeals),
+      gamerpower:      Boolean(gs.gamerpower),
+      gamerpowerGames: Boolean(gs.gamerpowerGames),
+      gamerpowerLoot:  Boolean(gs.gamerpowerLoot),
+      epicbundle:      Boolean(gs.epicbundle),
     },
     savedAt:             new Date().toISOString(),
   };

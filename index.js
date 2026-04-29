@@ -9,9 +9,11 @@ let activeConfig   = loadConfig(savedSettings);
 
 const _gs = activeConfig.gamingSources;
 const _gsActive = [
-  _gs.gameDeals  && 'GameDeals',
-  _gs.gamerpower && 'GamerPower',
-  _gs.epicbundle && 'EpicBundle',
+  _gs.gameDeals       && 'GameDeals',
+  _gs.gamerpower      && 'GamerPower',
+  _gs.gamerpowerGames && 'GamerPower·Games',
+  _gs.gamerpowerLoot  && 'GamerPower·Loot',
+  _gs.epicbundle      && 'EpicBundle',
 ].filter(Boolean);
 
 console.log('=== dealmaster: Deal Notification Tool ===');
