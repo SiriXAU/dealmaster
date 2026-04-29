@@ -46,6 +46,7 @@ export async function saveSettings(dataDir, settings) {
   const payload = {
     appriseUrls:         settings.appriseUrls.map(u => u.trim()).filter(Boolean),
     categories:          Array.isArray(settings.categories) ? settings.categories.map(c => c.trim()).filter(Boolean) : [],
+    keywords:            Array.isArray(settings.keywords)   ? settings.keywords.map(k => k.trim()).filter(Boolean)   : [],
     pollIntervalSeconds: Number(settings.pollIntervalSeconds),
     minVotes:            Number(settings.minVotes),
     maxSeenDeals:        Number(settings.maxSeenDeals),

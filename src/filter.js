@@ -1,14 +1,9 @@
-/**
- * Filters deals by configured categories and minimum vote count.
- *
- * @param {Array} deals - Normalized deal objects from fetcher
- * @param {Object} opts
- * @param {string[]} opts.categories - Whitelist of category substrings (empty = all)
- * @param {number} opts.minVotes - Minimum votes required (0 = all)
- * @returns {Array} Filtered deals
- */
-export function filterDeals(deals, { categories, minVotes }) {
-  return deals.filter(deal => matchesCategories(deal, categories) && meetsMinVotes(deal, minVotes));
+export function filterDeals(deals, { categories, minVotes, keywords }) {
+  return deals.filter(deal =>
+    matchesCategories(deal, categories) &&
+    meetsMinVotes(deal, minVotes) &&
+    matchesKeywords(deal, keywords)
+  );
 }
 
 /**
@@ -22,9 +17,20 @@ export function matchesCategories(deal, categories) {
   return categories.some(c => dealCat.includes(c.toLowerCase()));
 }
 
-/**
- * Returns true if the deal has at least minVotes votes.
- */
 export function meetsMinVotes(deal, minVotes) {
   return deal.votes >= (minVotes ?? 0);
+}
+
+/**
+ * Returns true if any keyword appears in the deal's title, description, or store.
+ * Empty keyword list passes all deals.
+ * Matching is case-insensitive substring.
+ */
+export function matchesKeywords(deal, keywords) {
+  if (!keywords || keywords.length === 0) return true;
+  const haystack = [deal.title, deal.description, deal.store]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return keywords.some(k => haystack.includes(k.toLowerCase()));
 }
