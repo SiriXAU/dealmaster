@@ -194,6 +194,50 @@ const HTML = `<!DOCTYPE html>
       </div>
     </div>
 
+    <!-- Gaming Sources -->
+    <div class="bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-2xl overflow-hidden shadow-sm">
+      <div class="px-5 pt-5 pb-4 border-b border-zinc-100 dark:border-zinc-700/60">
+        <h2 class="text-sm font-semibold">Gaming Sources</h2>
+        <p class="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">Optional dedicated gaming deal feeds. All disabled by default.</p>
+      </div>
+      <div class="px-5 py-2 divide-y divide-zinc-100 dark:divide-zinc-700/60">
+
+        <div class="flex items-center justify-between py-3.5">
+          <div>
+            <div class="text-sm font-medium text-zinc-700 dark:text-zinc-300">Game Deals <span class="text-xs font-normal text-zinc-400 dark:text-zinc-500 ml-1">game-deals.app/rss</span></div>
+            <div class="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">All game deals — sales, discounts &amp; offers</div>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer ml-4 shrink-0">
+            <input type="checkbox" id="toggle-game-deals" class="sr-only peer" />
+            <div class="w-9 h-5 bg-zinc-200 dark:bg-zinc-700 rounded-full peer peer-checked:bg-orange-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+          </label>
+        </div>
+
+        <div class="flex items-center justify-between py-3.5">
+          <div>
+            <div class="text-sm font-medium text-zinc-700 dark:text-zinc-300">GamerPower <span class="text-xs font-normal text-zinc-400 dark:text-zinc-500 ml-1">gamerpower.com/rss</span></div>
+            <div class="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">Free game giveaways &amp; freebies</div>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer ml-4 shrink-0">
+            <input type="checkbox" id="toggle-gamerpower" class="sr-only peer" />
+            <div class="w-9 h-5 bg-zinc-200 dark:bg-zinc-700 rounded-full peer peer-checked:bg-orange-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+          </label>
+        </div>
+
+        <div class="flex items-center justify-between py-3.5">
+          <div>
+            <div class="text-sm font-medium text-zinc-700 dark:text-zinc-300">EpicBundle <span class="text-xs font-normal text-zinc-400 dark:text-zinc-500 ml-1">epicbundle.com/feed</span></div>
+            <div class="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">Game bundles &amp; big promotional offers</div>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer ml-4 shrink-0">
+            <input type="checkbox" id="toggle-epicbundle" class="sr-only peer" />
+            <div class="w-9 h-5 bg-zinc-200 dark:bg-zinc-700 rounded-full peer peer-checked:bg-orange-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+          </label>
+        </div>
+
+      </div>
+    </div>
+
     <!-- Polling + Filtering -->
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
@@ -264,6 +308,9 @@ const HTML = `<!DOCTYPE html>
     const pollEl       = document.getElementById('poll-interval');
     const minVotesEl   = document.getElementById('min-votes');
     const maxSeenEl    = document.getElementById('max-seen');
+    const toggleGameDeals  = document.getElementById('toggle-game-deals');
+    const toggleGamerpower = document.getElementById('toggle-gamerpower');
+    const toggleEpicbundle = document.getElementById('toggle-epicbundle');
     const saveBtn      = document.getElementById('save-btn');
     const urlIndicator = document.getElementById('url-indicator');
     const bannerOk     = document.getElementById('banner-success');
@@ -381,6 +428,10 @@ const HTML = `<!DOCTYPE html>
       pollEl.value      = data.pollIntervalSeconds != null ? data.pollIntervalSeconds : 120;
       minVotesEl.value  = data.minVotes     != null ? data.minVotes     : 0;
       maxSeenEl.value   = data.maxSeenDeals != null ? data.maxSeenDeals : 500;
+      var gs = data.gamingSources || {};
+      toggleGameDeals.checked  = Boolean(gs.gameDeals);
+      toggleGamerpower.checked = Boolean(gs.gamerpower);
+      toggleEpicbundle.checked = Boolean(gs.epicbundle);
       renderChips();
       renderKeywordChips();
       updateUrlIndicator();
@@ -421,6 +472,11 @@ const HTML = `<!DOCTYPE html>
         pollIntervalSeconds: interval,
         minVotes:            parseInt(minVotesEl.value,  10) || 0,
         maxSeenDeals:        parseInt(maxSeenEl.value,   10) || 500,
+        gamingSources: {
+          gameDeals:  toggleGameDeals.checked,
+          gamerpower: toggleGamerpower.checked,
+          epicbundle: toggleEpicbundle.checked,
+        },
       };
 
       saveBtn.disabled = true;
@@ -472,6 +528,7 @@ export function startWebServer({ port, getConfig, getMeta, onSettingsSaved }) {
           pollIntervalSeconds: config.pollIntervalMs / 1000,
           minVotes:            config.minVotes,
           maxSeenDeals:        config.maxSeenDeals,
+          gamingSources:       config.gamingSources,
           savedAt:             meta.savedAt,
           fromEnv:             meta.savedAt === null,
         });

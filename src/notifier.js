@@ -1,10 +1,31 @@
 import { execFile } from 'child_process';
 
-const BRAND = {
-  color: 0xFF6600,
-  iconUrl: 'https://www.ozbargain.com.au/themes/ozbargain/logo-icon-256.png',
-  footerText: 'OzBargain',
+const SOURCE_BRANDS = {
+  ozbargain: {
+    color:      0xFF6600,
+    iconUrl:    'https://www.ozbargain.com.au/themes/ozbargain/logo-icon-256.png',
+    footerText: 'OzBargain',
+  },
+  'game-deals': {
+    color:      0x22C55E,
+    iconUrl:    'https://game-deals.app/favicon.ico',
+    footerText: 'Game Deals',
+  },
+  gamerpower: {
+    color:      0xEF4444,
+    iconUrl:    'https://www.gamerpower.com/favicon.ico',
+    footerText: 'GamerPower · Freebies',
+  },
+  epicbundle: {
+    color:      0x8B5CF6,
+    iconUrl:    'https://www.epicbundle.com/favicon.ico',
+    footerText: 'EpicBundle',
+  },
 };
+
+function getBrand(source) {
+  return SOURCE_BRANDS[source] ?? SOURCE_BRANDS.ozbargain;
+}
 
 /**
  * Sends a notification for a single deal to all configured URLs.
@@ -79,47 +100,65 @@ async function sendDiscordEmbed(deal, webhookUrl) {
 
 /**
  * Builds a Discord embed object for the given deal.
+ * OzBargain embeds show Price/Store/Delivery + Category/Votes/Author.
+ * Gaming source embeds show Price/Store/Category + Type/Source/Posted.
  */
 function buildEmbed(deal) {
+  const brand = getBrand(deal.source);
   const title = truncate(deal.title, 256);
   const description = truncate(deal.description, 300) || 'No description available.';
 
   // Always emit exactly 3 inline fields per row so Discord's grid stays aligned.
-  // Row 1: Price | Store | Delivery
-  // Row 2: Category | Votes | Posted by
-  // Row 3 (optional): Expires — only added when present; shown alone, full-width
   const inline = (name, value) => ({ name, value, inline: true });
 
-  const fields = [
-    inline('Price',     deal.price    || '—'),
-    inline('Store',     deal.store    || '—'),
-    inline('Delivery',  deal.delivery || '—'),
-    inline('Category',  deal.category || 'Uncategorised'),
-    inline('Votes',     String(deal.votes)),
-    inline('Posted by', deal.author   || 'Unknown'),
-  ];
-
-  if (deal.expiry) {
-    const expiryLabel = formatExpiry(deal.expiry);
-    if (expiryLabel) {
-      fields.push({ name: 'Expires', value: expiryLabel, inline: false });
+  let fields;
+  if (deal.source === 'ozbargain') {
+    // Row 1: Price | Store | Delivery
+    // Row 2: Category | Votes | Posted by
+    // Row 3 (optional): Expires — shown alone, full-width
+    fields = [
+      inline('Price',     deal.price    || '—'),
+      inline('Store',     deal.store    || '—'),
+      inline('Delivery',  deal.delivery || '—'),
+      inline('Category',  deal.category || 'Uncategorised'),
+      inline('Votes',     String(deal.votes)),
+      inline('Posted by', deal.author   || 'Unknown'),
+    ];
+    if (deal.expiry) {
+      const expiryLabel = formatExpiry(deal.expiry);
+      if (expiryLabel) fields.push({ name: 'Expires', value: expiryLabel, inline: false });
     }
+  } else {
+    // Gaming sources: no votes/delivery, show deal type and source instead
+    // Row 1: Price | Store | Category
+    // Row 2: Type  | Source | Posted
+    const posted = deal.pubDate
+      ? new Date(deal.pubDate).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
+      : '—';
+    fields = [
+      inline('Price',    deal.price    || 'Free'),
+      inline('Store',    deal.store    || '—'),
+      inline('Category', deal.category || 'Gaming'),
+      inline('Type',     deal.type     || 'Deal'),
+      inline('Source',   brand.footerText),
+      inline('Posted',   posted),
+    ];
   }
 
   const embed = {
     title,
     ...(deal.link ? { url: deal.link } : {}),
     description,
-    color: BRAND.color,
+    color: brand.color,
     fields,
     footer: {
-      text: BRAND.footerText,
-      icon_url: BRAND.iconUrl,
+      text:     brand.footerText,
+      icon_url: brand.iconUrl,
     },
     timestamp: deal.pubDate ? new Date(deal.pubDate).toISOString() : new Date().toISOString(),
   };
 
-  embed.thumbnail = { url: deal.imageUrl?.startsWith('http') ? deal.imageUrl : BRAND.iconUrl };
+  embed.thumbnail = { url: deal.imageUrl?.startsWith('http') ? deal.imageUrl : brand.iconUrl };
 
   return embed;
 }
@@ -143,11 +182,17 @@ function sendApprise(deal, urls) {
   const meta = [];
   if (deal.price) meta.push(`Price: ${deal.price}`);
   if (deal.store) meta.push(`Store: ${deal.store}`);
-  if (deal.delivery) meta.push(`Delivery: ${deal.delivery}`);
-  meta.push(`Category: ${deal.category || 'Uncategorised'}`);
-  meta.push(`Votes: ${deal.votes}`);
-  meta.push(`By: ${deal.author || 'Unknown'}`);
-  if (deal.expiry) meta.push(`Expires: ${deal.expiry}`);
+  if (deal.source === 'ozbargain') {
+    if (deal.delivery) meta.push(`Delivery: ${deal.delivery}`);
+    meta.push(`Category: ${deal.category || 'Uncategorised'}`);
+    meta.push(`Votes: ${deal.votes}`);
+    meta.push(`By: ${deal.author || 'Unknown'}`);
+    if (deal.expiry) meta.push(`Expires: ${deal.expiry}`);
+  } else {
+    meta.push(`Category: ${deal.category || 'Gaming'}`);
+    meta.push(`Type: ${deal.type || 'Deal'}`);
+    meta.push(`Source: ${getBrand(deal.source).footerText}`);
+  }
 
   parts.push('');
   parts.push(meta.join(' | '));

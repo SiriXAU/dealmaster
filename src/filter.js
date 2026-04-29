@@ -18,6 +18,8 @@ export function matchesCategories(deal, categories) {
 }
 
 export function meetsMinVotes(deal, minVotes) {
+  // Gaming sources don't use a voting system — always pass the votes filter
+  if (deal.source !== 'ozbargain') return true;
   return deal.votes >= (minVotes ?? 0);
 }
 

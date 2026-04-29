@@ -43,6 +43,7 @@ function validate(s) {
 export async function saveSettings(dataDir, settings) {
   validate(settings);
 
+  const gs = settings.gamingSources ?? {};
   const payload = {
     appriseUrls:         settings.appriseUrls.map(u => u.trim()).filter(Boolean),
     categories:          Array.isArray(settings.categories) ? settings.categories.map(c => c.trim()).filter(Boolean) : [],
@@ -50,6 +51,11 @@ export async function saveSettings(dataDir, settings) {
     pollIntervalSeconds: Number(settings.pollIntervalSeconds),
     minVotes:            Number(settings.minVotes),
     maxSeenDeals:        Number(settings.maxSeenDeals),
+    gamingSources: {
+      gameDeals:  Boolean(gs.gameDeals),
+      gamerpower: Boolean(gs.gamerpower),
+      epicbundle: Boolean(gs.epicbundle),
+    },
     savedAt:             new Date().toISOString(),
   };
 
