@@ -18,9 +18,6 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
   <style>
     body { background: #f4f4f5; }
-    .chip-active  { background: #FF6600; color: white; border-color: #FF6600; }
-    .chip-inactive { background: white; color: #3f3f46; border-color: #e4e4e7; }
-    .chip-inactive:hover { background: #fafafa; border-color: #d4d4d8; }
     input:focus, textarea:focus, select:focus {
       outline: none;
       box-shadow: 0 0 0 3px rgba(255,102,0,0.15);
@@ -105,22 +102,23 @@
       </div>
       <div class="px-5 py-4 space-y-3">
         <!-- Suggestion chips -->
-        <div class="flex flex-wrap gap-1.5">
-          <button class="chip-active text-xs font-medium px-3 py-1.5 rounded-full border transition-all">Computing</button>
-          <button class="chip-active text-xs font-medium px-3 py-1.5 rounded-full border transition-all">Gaming</button>
-          <button class="chip-inactive text-xs font-medium px-3 py-1.5 rounded-full border transition-all">Consumer Electronics</button>
-          <button class="chip-inactive text-xs font-medium px-3 py-1.5 rounded-full border transition-all">Home &amp; Garden</button>
-          <button class="chip-inactive text-xs font-medium px-3 py-1.5 rounded-full border transition-all">Food &amp; Drink</button>
-          <button class="chip-inactive text-xs font-medium px-3 py-1.5 rounded-full border transition-all">Travel</button>
-          <button class="chip-inactive text-xs font-medium px-3 py-1.5 rounded-full border transition-all">Health &amp; Beauty</button>
-          <button class="chip-inactive text-xs font-medium px-3 py-1.5 rounded-full border transition-all">Clothing</button>
-          <button class="chip-inactive text-xs font-medium px-3 py-1.5 rounded-full border transition-all">Automotive</button>
-          <button class="chip-inactive text-xs font-medium px-3 py-1.5 rounded-full border transition-all">Mobile Phones</button>
-          <button class="chip-inactive text-xs font-medium px-3 py-1.5 rounded-full border transition-all">Entertainment</button>
-          <button class="chip-inactive text-xs font-medium px-3 py-1.5 rounded-full border transition-all">Sports &amp; Outdoors</button>
+        <div id="chips" class="flex flex-wrap gap-1.5">
+          <button type="button" data-chip="Computing"            class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Computing</button>
+          <button type="button" data-chip="Gaming"               class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Gaming</button>
+          <button type="button" data-chip="Consumer Electronics" class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Consumer Electronics</button>
+          <button type="button" data-chip="Home &amp; Garden"    class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Home &amp; Garden</button>
+          <button type="button" data-chip="Food &amp; Drink"     class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Food &amp; Drink</button>
+          <button type="button" data-chip="Travel"               class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Travel</button>
+          <button type="button" data-chip="Health &amp; Beauty"  class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Health &amp; Beauty</button>
+          <button type="button" data-chip="Clothing"             class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Clothing</button>
+          <button type="button" data-chip="Automotive"           class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Automotive</button>
+          <button type="button" data-chip="Mobile Phones"        class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Mobile Phones</button>
+          <button type="button" data-chip="Entertainment"        class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Entertainment</button>
+          <button type="button" data-chip="Sports &amp; Outdoors" class="text-xs font-medium px-3 py-1.5 rounded-full border transition-all cursor-pointer select-none">Sports &amp; Outdoors</button>
         </div>
         <!-- Text input -->
         <input
+          id="categories-input"
           type="text"
           class="w-full text-sm bg-zinc-50 border border-zinc-200 rounded-xl px-3.5 py-2.5 placeholder-zinc-400 transition-colors"
           placeholder="Or type custom categories, comma-separated…"
@@ -199,44 +197,51 @@
   </div>
 
   <script>
-    const textInput = document.querySelector('input[type="text"]');
+    const chipsEl = document.getElementById('chips');
+    const textInput = document.getElementById('categories-input');
+
+    const ACTIVE   = { background: '#FF6600', color: '#fff',     borderColor: '#FF6600' };
+    const INACTIVE = { background: '#fff',    color: '#3f3f46',  borderColor: '#e4e4e7' };
 
     function getSelected() {
-      return textInput.value
-        .split(',')
-        .map(v => v.trim())
-        .filter(Boolean)
-        .map(v => v.toLowerCase());
+      return new Set(
+        textInput.value.split(',').map(v => v.trim().toLowerCase()).filter(Boolean)
+      );
     }
 
-    function syncChipsToInput() {
+    function applyStyle(chip, active) {
+      const s = active ? ACTIVE : INACTIVE;
+      chip.style.background   = s.background;
+      chip.style.color        = s.color;
+      chip.style.borderColor  = s.borderColor;
+    }
+
+    function renderChips() {
       const selected = getSelected();
-      document.querySelectorAll('[class*="chip-"]').forEach(chip => {
-        const match = selected.includes(chip.textContent.trim().toLowerCase());
-        chip.classList.toggle('chip-active', match);
-        chip.classList.toggle('chip-inactive', !match);
+      chipsEl.querySelectorAll('[data-chip]').forEach(chip => {
+        applyStyle(chip, selected.has(chip.dataset.chip.toLowerCase()));
       });
     }
 
-    document.querySelectorAll('[class*="chip-"]').forEach(chip => {
-      chip.addEventListener('click', () => {
-        const label = chip.textContent.trim();
-        let values = textInput.value
-          .split(',')
-          .map(v => v.trim())
-          .filter(Boolean);
-        const idx = values.findIndex(v => v.toLowerCase() === label.toLowerCase());
-        if (idx === -1) {
-          values.push(label);
-        } else {
-          values.splice(idx, 1);
-        }
-        textInput.value = values.join(', ');
-        syncChipsToInput();
-      });
+    // Event delegation — one listener on the container
+    chipsEl.addEventListener('click', function(e) {
+      const chip = e.target.closest('[data-chip]');
+      if (!chip) return;
+      const label = chip.dataset.chip;
+      const selected = getSelected();
+      let values = textInput.value.split(',').map(v => v.trim()).filter(Boolean);
+      const idx = values.findIndex(v => v.toLowerCase() === label.toLowerCase());
+      if (idx === -1) {
+        values.push(label);
+      } else {
+        values.splice(idx, 1);
+      }
+      textInput.value = values.join(', ');
+      renderChips();
     });
 
-    textInput.addEventListener('input', syncChipsToInput);
+    textInput.addEventListener('input', renderChips);
+    renderChips(); // initialise on load
   </script>
 
 </body>
