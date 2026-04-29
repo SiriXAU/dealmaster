@@ -25,12 +25,12 @@ const genericParser = new Parser({
 
 const OZB_FEED_URL = 'https://www.ozbargain.com.au/deals/feed';
 
+// GamerPower's RSS feeds produce malformed XML; use their JSON API instead.
+const GAMERPOWER_API_BASE = 'https://www.gamerpower.com/api/giveaways';
+
 export const GAMING_FEED_URLS = {
-  gameDeals:       'https://game-deals.app/rss/all',
-  gamerpower:      'https://www.gamerpower.com/rss/giveaways',
-  gamerpowerGames: 'https://www.gamerpower.com/rss/games',
-  gamerpowerLoot:  'https://www.gamerpower.com/rss/loot',
-  epicbundle:      'https://epicbundle.com/feed',
+  gameDeals:  'https://game-deals.app/rss/all',
+  epicbundle: 'https://epicbundle.com/feed',
 };
 
 /**
@@ -47,18 +47,23 @@ export async function fetchDeals() {
   }
 }
 
-async function fetchGamingSource(sourceId, url) {
+async function fetchRssFeed(sourceId, url) {
   try {
-    let feed;
-    if (sourceId.startsWith('gamerpower')) {
-      // Gamerpower RSS embeds HTML with boolean attributes (e.g. `<img loading>`)
-      // which are invalid XML. Fetch raw and sanitize before parsing.
-      const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
-      feed = await genericParser.parseString(sanitizeXml(await res.text()));
-    } else {
-      feed = await genericParser.parseURL(url);
-    }
+    const feed = await genericParser.parseURL(url);
     return feed.items.map(item => normalizeGamingItem(item, sourceId));
+  } catch (err) {
+    console.error(`[fetcher] Failed to fetch ${sourceId} feed: ${err.message}`);
+    return [];
+  }
+}
+
+async function fetchGamerPower(sourceId, apiUrl) {
+  try {
+    const res = await fetch(apiUrl, { headers: { 'User-Agent': USER_AGENT } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!Array.isArray(data)) return [];
+    return data.map(item => normalizeGamerPowerItem(item, sourceId));
   } catch (err) {
     console.error(`[fetcher] Failed to fetch ${sourceId} feed: ${err.message}`);
     return [];
@@ -74,11 +79,11 @@ async function fetchGamingSource(sourceId, url) {
 export async function fetchAllDeals(config) {
   const { gamingSources = {} } = config;
   const tasks = [fetchDeals()];
-  if (gamingSources.gameDeals)       tasks.push(fetchGamingSource('game-deals',      GAMING_FEED_URLS.gameDeals));
-  if (gamingSources.gamerpower)      tasks.push(fetchGamingSource('gamerpower',       GAMING_FEED_URLS.gamerpower));
-  if (gamingSources.gamerpowerGames) tasks.push(fetchGamingSource('gamerpower-games', GAMING_FEED_URLS.gamerpowerGames));
-  if (gamingSources.gamerpowerLoot)  tasks.push(fetchGamingSource('gamerpower-loot',  GAMING_FEED_URLS.gamerpowerLoot));
-  if (gamingSources.epicbundle)      tasks.push(fetchGamingSource('epicbundle',        GAMING_FEED_URLS.epicbundle));
+  if (gamingSources.gameDeals)       tasks.push(fetchRssFeed('game-deals',       GAMING_FEED_URLS.gameDeals));
+  if (gamingSources.gamerpower)      tasks.push(fetchGamerPower('gamerpower',       GAMERPOWER_API_BASE));
+  if (gamingSources.gamerpowerGames) tasks.push(fetchGamerPower('gamerpower-games', `${GAMERPOWER_API_BASE}?type=game`));
+  if (gamingSources.gamerpowerLoot)  tasks.push(fetchGamerPower('gamerpower-loot',  `${GAMERPOWER_API_BASE}?type=loot`));
+  if (gamingSources.epicbundle)      tasks.push(fetchRssFeed('epicbundle',          GAMING_FEED_URLS.epicbundle));
   const results = await Promise.all(tasks);
   return results.flat();
 }
@@ -162,11 +167,8 @@ function normalizeOzbItem(item) {
 // ── Gaming source helpers ─────────────────────────────────────────────────────
 
 const GAMING_SOURCE_TYPE = {
-  'game-deals':      'Deal',
-  gamerpower:        'Freebie',
-  'gamerpower-games': 'Freebie',
-  'gamerpower-loot':  'Freebie',
-  epicbundle:        'Bundle',
+  'game-deals': 'Deal',
+  epicbundle:   'Bundle',
 };
 
 function extractMediaUrl(item) {
@@ -184,9 +186,7 @@ function extractMediaUrl(item) {
 }
 
 /**
- * Normalizes a raw gaming RSS item into a consistent deal shape.
- * Gaming deals carry a `type` field ('Freebie', 'Bundle', 'Deal') and
- * always have votes: 0 since these sources don't use a voting system.
+ * Normalizes a raw RSS gaming item (game-deals, epicbundle) into a consistent deal shape.
  */
 function normalizeGamingItem(item, sourceId) {
   const title   = item.title ?? 'Unknown Deal';
@@ -202,7 +202,7 @@ function normalizeGamingItem(item, sourceId) {
     votes:       0,
     imageUrl:    extractMediaUrl(item),
     author:      item.creator ?? item['dc:creator'] ?? null,
-    price:       extractPriceFromTitle(title) ?? (sourceId.startsWith('gamerpower') ? 'Free' : null),
+    price:       extractPriceFromTitle(title) ?? null,
     expiry:      null,
     store:       extractStore(title),
     delivery:    null,
@@ -212,13 +212,31 @@ function normalizeGamingItem(item, sourceId) {
 }
 
 /**
- * Converts HTML-style boolean attributes (no value) to XML-compliant form.
- * e.g. `<img loading>` → `<img loading="">` so strict XML parsers don't choke.
+ * Normalizes a GamerPower JSON API item into a consistent deal shape.
+ * API docs: https://www.gamerpower.com/api-read
  */
-function sanitizeXml(xml) {
-  return xml.replace(/<[^>]+>/g, tag =>
-    tag.replace(/(\s[a-zA-Z][a-zA-Z0-9_:-]*)(?!=)/g, '$1=""')
-  );
+function normalizeGamerPowerItem(item, sourceId) {
+  const worth   = item.worth === 'N/A' ? null : item.worth;
+  const endDate = item.end_date === 'N/A' ? null : item.end_date;
+  const type    = 'Freebie';
+
+  return {
+    id:          `gamerpower:${item.id}`,
+    title:       item.title ?? 'Unknown Deal',
+    link:        item.open_giveaway_url ?? item.gamerpower_url ?? '',
+    category:    'Gaming',
+    pubDate:     item.published_date ?? null,
+    description: item.description ?? '',
+    votes:       0,
+    imageUrl:    item.thumbnail ?? item.image ?? null,
+    author:      null,
+    price:       worth ?? 'Free',
+    expiry:      endDate,
+    store:       null,
+    delivery:    null,
+    type,
+    source:      sourceId,
+  };
 }
 
 /**
