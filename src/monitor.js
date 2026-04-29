@@ -14,8 +14,28 @@ function touchHealth() {
   }
 }
 
-// Delay between notifications to avoid overwhelming services
 const INTER_POST_DELAY_MS = 2000;
+
+let _pollTimer = null;
+
+export function stopPollLoop() {
+  if (_pollTimer !== null) {
+    clearInterval(_pollTimer);
+    _pollTimer = null;
+  }
+}
+
+export function startPollLoop(config) {
+  stopPollLoop();
+  _pollTimer = setInterval(async () => {
+    try {
+      await runOnce(config);
+    } catch (err) {
+      console.error(`[monitor] Unexpected error during poll: ${err.message}`);
+    }
+  }, config.pollIntervalMs);
+  console.log(`[monitor] Poll loop started (interval: ${config.pollIntervalMs / 1000}s)`);
+}
 
 /**
  * Runs a single poll cycle:
@@ -73,7 +93,6 @@ export async function startMonitor(config) {
   const seenIds = await loadSeenIds(config.dataDir);
 
   if (filtered.length > 0) {
-    // Post the single most recent deal as a startup heartbeat
     const latest = filtered[0];
     console.log(`[monitor] Sending startup deal: ${latest.title}`);
     await sendDealNotification(latest, config);
@@ -88,11 +107,5 @@ export async function startMonitor(config) {
 
   console.log(`[monitor] Ready. Watching for new deals every ${config.pollIntervalMs / 1000}s...`);
 
-  setInterval(async () => {
-    try {
-      await runOnce(config);
-    } catch (err) {
-      console.error(`[monitor] Unexpected error during poll: ${err.message}`);
-    }
-  }, config.pollIntervalMs);
+  startPollLoop(config);
 }
