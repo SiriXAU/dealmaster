@@ -7,10 +7,9 @@ Dealmaster monitors deal feeds and sends notifications via [Apprise](https://git
 **Primary source:** [OzBargain](https://www.ozbargain.com.au/deals) — community deal posts with votes, categories, and store info.
 
 **Optional gaming sources** (each independently toggled on/off):
-- [game-deals.app](https://game-deals.app) — all game deals, sales, and discounts
-- [GamerPower · Giveaways](https://www.gamerpower.com/rss/giveaways) — all free game giveaways and freebies
-- [GamerPower · Games](https://www.gamerpower.com/rss/games) — full free games only (no loot or DLC)
-- [GamerPower · Loot](https://www.gamerpower.com/rss/loot) — in-game loot, DLC, and bonus content only
+- [GamerPower · Giveaways](https://www.gamerpower.com) — all free game giveaways and freebies
+- [GamerPower · Games](https://www.gamerpower.com) — full free games only (no loot or DLC)
+- [GamerPower · Loot](https://www.gamerpower.com) — in-game loot, DLC, and bonus content only
 - [EpicBundle](https://epicbundle.com) — game bundles and big promotional offers
 
 ---
@@ -18,7 +17,7 @@ Dealmaster monitors deal feeds and sends notifications via [Apprise](https://git
 ## Features
 
 - Polls the OzBargain RSS feed on a configurable interval
-- **Optional gaming sources** — Game Deals, GamerPower (Giveaways, Games, and Loot as separate feeds), and EpicBundle can each be toggled on/off independently from the web UI or via env vars
+- **Optional gaming sources** — GamerPower (Giveaways, Games, and Loot as separate feeds) and EpicBundle can each be toggled on/off independently from the web UI or via env vars
 - Sends notifications via Apprise to any supported service (Discord, Slack, Telegram, email, and more)
 - Discord URLs receive **rich embeds** — coloured card with source-specific branding, price, store, category, and relevant metadata
 - **Web settings UI** — change any setting live at `http://localhost:8080`, dark mode and mobile-friendly
@@ -50,7 +49,6 @@ services:
       - MIN_VOTES=${MIN_VOTES:-0}
       - MAX_SEEN_DEALS=${MAX_SEEN_DEALS:-500}
       # Optional gaming sources — remove or set to false to disable
-      - GAMING_DEALS_ENABLED=${GAMING_DEALS_ENABLED:-false}
       - GAMERPOWER_ENABLED=${GAMERPOWER_ENABLED:-false}
       - GAMERPOWER_GAMES_ENABLED=${GAMERPOWER_GAMES_ENABLED:-false}
       - GAMERPOWER_LOOT_ENABLED=${GAMERPOWER_LOOT_ENABLED:-false}
@@ -158,7 +156,6 @@ These control initial configuration and serve as fallback values once the web UI
 | `POLL_INTERVAL_SECONDS` | No | `120` | Seconds between feed checks — minimum `30` |
 | `MIN_VOTES` | No | `0` | Minimum OzBargain vote count required to notify (does not affect gaming sources) |
 | `MAX_SEEN_DEALS` | No | `500` | Maximum deal IDs to retain in the persistence store |
-| `GAMING_DEALS_ENABLED` | No | `false` | Set to `true` to enable the game-deals.app feed |
 | `GAMERPOWER_ENABLED` | No | `false` | Set to `true` to enable the GamerPower all-giveaways feed |
 | `GAMERPOWER_GAMES_ENABLED` | No | `false` | Set to `true` to enable the GamerPower full-games-only feed |
 | `GAMERPOWER_LOOT_ENABLED` | No | `false` | Set to `true` to enable the GamerPower loot/DLC-only feed |
@@ -268,12 +265,11 @@ MIN_VOTES=10
 
 Three optional gaming deal feeds can be enabled independently — from the web UI (Gaming Sources card) or via environment variables. All are disabled by default and have no effect on OzBargain behaviour when off.
 
-| Source | Feed URL | Deal type | Discord colour |
+| Source | API / Feed | Deal type | Discord colour |
 |---|---|---|---|
-| **Game Deals** | `game-deals.app/rss/all` | All game deals, sales & discounts | Green |
-| **GamerPower · Giveaways** | `gamerpower.com/rss/giveaways` | All free game giveaways & freebies | Red |
-| **GamerPower · Games** | `gamerpower.com/rss/games` | Full free games only (no loot or DLC) | Red |
-| **GamerPower · Loot** | `gamerpower.com/rss/loot` | In-game loot, DLC & bonus content | Red |
+| **GamerPower · Giveaways** | `gamerpower.com/api/giveaways` | All free game giveaways & freebies | Red |
+| **GamerPower · Games** | `gamerpower.com/api/giveaways?type=game` | Full free games only (no loot or DLC) | Red |
+| **GamerPower · Loot** | `gamerpower.com/api/giveaways?type=loot` | In-game loot, DLC & bonus content | Red |
 | **EpicBundle** | `epicbundle.com/feed` | Game bundles & big promos | Purple |
 
 ### How gaming deals differ from OzBargain
@@ -291,7 +287,6 @@ Three optional gaming deal feeds can be enabled independently — from the web U
 
 ```
 # .env
-GAMING_DEALS_ENABLED=true
 GAMERPOWER_ENABLED=true
 GAMERPOWER_GAMES_ENABLED=true
 GAMERPOWER_LOOT_ENABLED=true
@@ -388,12 +383,11 @@ Possible statuses: `starting` (within the 30s start period), `healthy`, `unhealt
 ┌──────────▼───────────┐     ┌─────────▼──────────────────────┐  ┌─────────────────┐
 │     settings.js      │     │          fetcher.js             │  │   notifier.js   │
 │  load/save           │     │  fetchAllDeals(config)          │  │  Apprise CLI /  │
-│  settings.json       │     │  ├─ OzBargain RSS (always)         │  │  Discord embed  │
-└──────────────────────┘     │  ├─ game-deals.app    (if enabled) │  │  (per-source    │
-                             │  ├─ gamerpower/giveaways (if ena.) │  │   branding)     │
-                             │  ├─ gamerpower/games   (if enabled) │  └─────────────────┘
-                             │  ├─ gamerpower/loot    (if enabled) │
-                             │  └─ epicbundle.com    (if enabled) │
+│  settings.json       │     │  ├─ OzBargain RSS (always)          │  │  Discord embed  │
+└──────────────────────┘     │  ├─ gamerpower/giveaways (if ena.)  │  │  (per-source    │
+                             │  ├─ gamerpower/games   (if enabled) │  │   branding)     │
+                             │  ├─ gamerpower/loot    (if enabled) │  └─────────────────┘
+                             │  └─ epicbundle.com    (if enabled)  │
                              └─────────┬──────────────────────────┘
                                        │ parallel fetch, flat array
                              ┌─────────▼──────┐
@@ -414,7 +408,7 @@ Possible statuses: `starting` (within the 30s start period), `healthy`, `unhealt
 
 1. `index.js` loads `settings.json` (if present) then builds config, starts the web UI, registers shutdown handlers, and calls `startMonitor()`
 2. On startup, `monitor.js` fetches all enabled sources, sends a startup notification for the most recent deal, marks everything as seen, then starts the poll interval
-3. On each poll, `fetcher.js` calls `fetchAllDeals(config)` which fetches OzBargain plus any enabled gaming sources **in parallel**, normalising each item into a consistent deal shape. Gaming items carry a `type` field (`Freebie`, `Bundle`, or `Deal`) and `votes: 0`
+3. On each poll, `fetcher.js` calls `fetchAllDeals(config)` which fetches OzBargain plus any enabled gaming sources **in parallel**, normalising each item into a consistent deal shape. GamerPower is fetched via their JSON API; EpicBundle uses RSS. Gaming items carry a `type` field (`Freebie` or `Bundle`) and `votes: 0`
 4. `filter.js` applies the category whitelist and keyword filter to all sources; the minimum vote threshold is only applied to OzBargain deals
 5. `store.js` loads the persisted set of seen deal IDs and filters out already-seen deals
 6. `notifier.js` sends a notification for each new deal — Discord embeds use per-source branding and a layout adapted to the available fields; all other URLs use the Apprise CLI
@@ -432,7 +426,7 @@ dealmaster/
 │   ├── config.js         # Config loading — settings.json → env var → default
 │   ├── settings.js       # Load/save settings.json with validation
 │   ├── web.js            # HTTP settings UI (port 8080) and /api/settings routes
-│   ├── fetcher.js        # OzBargain RSS fetch and normalisation
+│   ├── fetcher.js        # Feed fetching and deal normalisation (OzBargain RSS, GamerPower JSON API, EpicBundle RSS)
 │   ├── filter.js         # Category, keyword, and vote filtering
 │   ├── monitor.js        # Poll loop, startup heartbeat, health file
 │   ├── notifier.js       # Apprise CLI + Discord embed notification sender
@@ -448,6 +442,6 @@ dealmaster/
 
 - **Runtime:** Docker or Podman with Compose support (`docker compose` / `podman-compose`)
 - **Notifications:** An Apprise-compatible notification service (Discord, Slack, Telegram, email, etc.)
-- **Network:** Outbound HTTPS to `www.ozbargain.com.au` and your notification service endpoint(s). When gaming sources are enabled, also requires outbound HTTPS to `game-deals.app`, `www.gamerpower.com`, and/or `epicbundle.com`
+- **Network:** Outbound HTTPS to `www.ozbargain.com.au` and your notification service endpoint(s). When gaming sources are enabled, also requires outbound HTTPS to `www.gamerpower.com` and/or `epicbundle.com`
 
 No accounts, API keys, or external services beyond the above are required.
