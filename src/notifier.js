@@ -1,15 +1,13 @@
 import { execFile } from 'child_process';
+import { createLogger } from './logger.js';
+
+const log = createLogger('notifier');
 
 const SOURCE_BRANDS = {
   ozbargain: {
     color:      0xFF6600,
     iconUrl:    'https://www.ozbargain.com.au/themes/ozbargain/logo-icon-256.png',
     footerText: 'OzBargain',
-  },
-  'game-deals': {
-    color:      0x22C55E,
-    iconUrl:    'https://game-deals.app/favicon.ico',
-    footerText: 'Game Deals',
   },
   gamerpower: {
     color:      0xEF4444,
@@ -37,6 +35,8 @@ function getBrand(source) {
   return SOURCE_BRANDS[source] ?? SOURCE_BRANDS.ozbargain;
 }
 
+const _lastDiscordSend = new Map();
+
 /**
  * Sends a notification for a single deal to all configured URLs.
  * Discord URLs (discord://id/token) receive a rich embed via the webhook API.
@@ -44,7 +44,7 @@ function getBrand(source) {
  *
  * @param {Object} deal   - Normalized deal object
  * @param {Object} config - App config (appriseUrls)
- * @returns {Promise<boolean>} true if all destinations succeeded
+ * @returns {Promise<{ ok: boolean, results: Array<{ url: string, ok: boolean }> }>}
  */
 export async function sendDealNotification(deal, config) {
   const discordUrls = [];
@@ -59,12 +59,24 @@ export async function sendDealNotification(deal, config) {
     }
   }
 
-  const results = await Promise.all([
-    ...discordUrls.map(webhookUrl => sendDiscordEmbed(deal, webhookUrl)),
-    appriseUrls.length > 0 ? sendApprise(deal, appriseUrls) : Promise.resolve(true),
-  ]);
+  const discordResults = await Promise.all(
+    discordUrls.map(async webhookUrl => ({
+      url: webhookUrl,
+      ok: await sendDiscordEmbed(deal, webhookUrl),
+    }))
+  );
 
-  return results.every(Boolean);
+  const appriseOk = appriseUrls.length > 0
+    ? await sendApprise(deal, appriseUrls)
+    : true;
+
+  const allResults = [
+    ...discordResults,
+    ...appriseUrls.map(u => ({ url: u, ok: appriseOk })),
+  ];
+
+  const ok = allResults.every(r => r.ok);
+  return { ok, results: allResults };
 }
 
 /**
@@ -72,7 +84,7 @@ export async function sendDealNotification(deal, config) {
  * discord://webhook_id/webhook_token → https://discord.com/api/webhooks/id/token
  * Returns null if the URL is not a discord:// URL.
  */
-function parseDiscordUrl(url) {
+export function parseDiscordUrl(url) {
   const match = url.match(/^discord:\/\/([^/]+)\/(.+)$/i);
   if (!match) return null;
   return `https://discord.com/api/webhooks/${match[1]}/${match[2]}`;
@@ -80,8 +92,14 @@ function parseDiscordUrl(url) {
 
 /**
  * Posts a rich Discord embed for the given deal.
+ * Enforces per-webhook rate limiting and handles 429 responses.
  */
 async function sendDiscordEmbed(deal, webhookUrl) {
+  const MIN_INTERVAL_MS = 1000;
+  const last = _lastDiscordSend.get(webhookUrl) ?? 0;
+  const wait = MIN_INTERVAL_MS - (Date.now() - last);
+  if (wait > 0) await sleep(wait);
+
   const embed = buildEmbed(deal);
   const payload = {
     username: 'Dealmaster',
@@ -89,23 +107,41 @@ async function sendDiscordEmbed(deal, webhookUrl) {
     embeds: [embed],
   };
 
-  try {
-    const res = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+  const MAX_ATTEMPTS = 2;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    try {
+      _lastDiscordSend.set(webhookUrl, Date.now());
+      const res = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
 
-    if (!res.ok) {
+      if (res.ok) return true;
+
+      if (res.status === 429) {
+        const retryAfter = res.headers.get('Retry-After');
+        const delay = retryAfter ? parseFloat(retryAfter) * 1000 : 2000;
+        log.warn(`Discord 429 rate limited, waiting ${delay}ms (attempt ${attempt + 1}/${MAX_ATTEMPTS})`);
+        await sleep(delay);
+        continue;
+      }
+
       const body = await res.text().catch(() => '');
-      console.error(`[notifier] Discord returned ${res.status}: ${body}`);
+      log.error(`Discord returned ${res.status}: ${body}`);
+      return false;
+    } catch (err) {
+      if (attempt < MAX_ATTEMPTS - 1) {
+        log.warn(`Discord network error, retrying (${err.message})`);
+        await sleep(1000);
+        continue;
+      }
+      log.error(`Failed to send Discord embed: ${err.message}`);
       return false;
     }
-    return true;
-  } catch (err) {
-    console.error(`[notifier] Failed to send Discord embed: ${err.message}`);
-    return false;
   }
+
+  return false;
 }
 
 /**
@@ -113,7 +149,7 @@ async function sendDiscordEmbed(deal, webhookUrl) {
  * OzBargain embeds show Price/Store/Delivery + Category/Votes/Author.
  * Gaming source embeds show Price/Store/Category + Type/Source/Posted.
  */
-function buildEmbed(deal) {
+export function buildEmbed(deal) {
   const brand = getBrand(deal.source);
   const title = truncate(deal.title, 256);
   const description = truncate(deal.description, 300) || 'No description available.';
@@ -216,7 +252,7 @@ function sendApprise(deal, urls) {
       ['--title', title, '--body', body, ...urls],
       (err, _stdout, stderr) => {
         if (err) {
-          console.error(`[notifier] Apprise exited with code ${err.code}: ${stderr}`);
+          log.error(`Apprise exited with code ${err.code}: ${stderr}`);
           resolve(false);
         } else {
           resolve(true);

@@ -1,3 +1,7 @@
+import { createLogger } from './logger.js';
+
+const log = createLogger('config');
+
 /**
  * Loads and validates configuration from saved settings (web UI) with env var fallback.
  * savedSettings (from settings.json) takes precedence over env vars for every field it contains.
@@ -14,10 +18,10 @@ export function loadConfig(savedSettings = null) {
     .filter(u => u.length > 0);
 
   if (appriseUrls.length === 0) {
-    console.error('ERROR: APPRISE_URLS environment variable is required.');
-    console.error('Set it to one or more Apprise notification URLs (comma-separated), e.g.:');
-    console.error('  docker run -e APPRISE_URLS="discord://YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN" dealmaster');
-    console.error('  See https://github.com/caronc/apprise/wiki for all supported services.');
+    log.error('APPRISE_URLS environment variable is required.');
+    log.error('Set it to one or more Apprise notification URLs (comma-separated), e.g.:');
+    log.error('  docker run -e APPRISE_URLS="discord://YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN" dealmaster');
+    log.error('  See https://github.com/caronc/apprise/wiki for all supported services.');
     process.exit(1);
   }
 
@@ -25,7 +29,7 @@ export function loadConfig(savedSettings = null) {
     ? Number(s.pollIntervalSeconds)
     : parseInt(process.env.POLL_INTERVAL_SECONDS ?? '120', 10);
   if (isNaN(pollIntervalSeconds) || pollIntervalSeconds < 30) {
-    console.error('ERROR: POLL_INTERVAL_SECONDS must be a number >= 30');
+    log.error('POLL_INTERVAL_SECONDS must be a number >= 30');
     process.exit(1);
   }
 

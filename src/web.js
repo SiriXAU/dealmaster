@@ -1,6 +1,80 @@
 import http from 'node:http';
+import { createLogger } from './logger.js';
+
+const log = createLogger('web');
 
 const MAX_BODY = 65_536; // 64 KB
+
+function validateSettings(body) {
+  if (body == null || typeof body !== 'object') {
+    return { error: 'Request body must be a JSON object' };
+  }
+
+  if (!Array.isArray(body.appriseUrls)) {
+    return { error: 'appriseUrls must be an array', field: 'appriseUrls' };
+  }
+  for (const u of body.appriseUrls) {
+    if (typeof u !== 'string' || u.trim().length === 0) {
+      return { error: 'Each apprise URL must be a non-empty string', field: 'appriseUrls' };
+    }
+  }
+
+  if (body.pollIntervalSeconds != null) {
+    const n = Number(body.pollIntervalSeconds);
+    if (!Number.isInteger(n) || n < 30) {
+      return { error: 'pollIntervalSeconds must be an integer >= 30', field: 'pollIntervalSeconds' };
+    }
+  }
+
+  if (body.minVotes != null) {
+    const n = Number(body.minVotes);
+    if (!Number.isInteger(n) || n < 0) {
+      return { error: 'minVotes must be an integer >= 0', field: 'minVotes' };
+    }
+  }
+
+  if (body.maxSeenDeals != null) {
+    const n = Number(body.maxSeenDeals);
+    if (!Number.isInteger(n) || n < 1) {
+      return { error: 'maxSeenDeals must be an integer >= 1', field: 'maxSeenDeals' };
+    }
+  }
+
+  if (body.categories != null) {
+    if (!Array.isArray(body.categories)) {
+      return { error: 'categories must be an array', field: 'categories' };
+    }
+    for (const c of body.categories) {
+      if (typeof c !== 'string') {
+        return { error: 'Each category must be a string', field: 'categories' };
+      }
+    }
+  }
+
+  if (body.keywords != null) {
+    if (!Array.isArray(body.keywords)) {
+      return { error: 'keywords must be an array', field: 'keywords' };
+    }
+    for (const k of body.keywords) {
+      if (typeof k !== 'string') {
+        return { error: 'Each keyword must be a string', field: 'keywords' };
+      }
+    }
+  }
+
+  if (body.gamingSources != null) {
+    if (typeof body.gamingSources !== 'object' || Array.isArray(body.gamingSources)) {
+      return { error: 'gamingSources must be an object', field: 'gamingSources' };
+    }
+    for (const [key, val] of Object.entries(body.gamingSources)) {
+      if (typeof val !== 'boolean') {
+        return { error: `gamingSources.${key} must be a boolean`, field: 'gamingSources' };
+      }
+    }
+  }
+
+  return null;
+}
 
 function jsonResponse(res, status, body) {
   const payload = JSON.stringify(body);
@@ -521,7 +595,7 @@ const HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-export function startWebServer({ port, getConfig, getMeta, onSettingsSaved }) {
+export function startWebServer({ port, getConfig, getMeta, getLastPollTime, getHistory, onSettingsSaved }) {
   const server = http.createServer(async (req, res) => {
     const { method, url } = req;
 
@@ -549,6 +623,24 @@ export function startWebServer({ port, getConfig, getMeta, onSettingsSaved }) {
         return;
       }
 
+      if (method === 'GET' && url === '/health') {
+        const pollMs = getConfig().pollIntervalMs;
+        const since = Date.now() - getLastPollTime();
+        const healthy = since < pollMs * 3;
+        jsonResponse(res, healthy ? 200 : 503, {
+          healthy,
+          lastPollMsAgo: since,
+          pollIntervalMs: pollMs,
+        });
+        return;
+      }
+
+      if (method === 'GET' && url === '/api/history') {
+        const history = await getHistory();
+        jsonResponse(res, 200, history);
+        return;
+      }
+
       if (method === 'POST' && url === '/api/settings') {
         let raw;
         try {
@@ -566,6 +658,12 @@ export function startWebServer({ port, getConfig, getMeta, onSettingsSaved }) {
           return;
         }
 
+        const validationError = validateSettings(body);
+        if (validationError) {
+          jsonResponse(res, 400, validationError);
+          return;
+        }
+
         try {
           const saved = await onSettingsSaved(body);
           jsonResponse(res, 200, { ok: true, savedAt: saved.savedAt });
@@ -577,13 +675,13 @@ export function startWebServer({ port, getConfig, getMeta, onSettingsSaved }) {
 
       jsonResponse(res, 404, { error: 'Not found' });
     } catch (err) {
-      console.error('[web] Unhandled error:', err.message);
+      log.error(`Unhandled error: ${err.message}`);
       if (!res.headersSent) jsonResponse(res, 500, { error: 'Internal server error' });
     }
   });
 
   server.listen(port, () => {
-    console.log(`[web] Settings UI: http://localhost:${port}`);
+    log.info(`Settings UI: http://localhost:${port}`);
   });
 
   return server;
