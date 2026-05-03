@@ -3,7 +3,14 @@ import { createLogger } from './logger.js';
 
 const log = createLogger('fetcher');
 
-const USER_AGENT = 'Mozilla/5.0 (compatible; dealmaster/1.0; +https://github.com/SiriXAU/dealmaster)';
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+const DEFAULT_HEADERS = {
+  'User-Agent': USER_AGENT,
+  'Accept': 'application/rss+xml, application/xml, text/xml, */*;q=0.8',
+  'Accept-Language': 'en-AU,en;q=0.9',
+  'Cache-Control': 'no-cache',
+};
 
 const ozbParser = new Parser({
   customFields: {
@@ -12,7 +19,7 @@ const ozbParser = new Parser({
       ['content:encoded', 'contentEncoded'],
     ],
   },
-  requestOptions: { headers: { 'User-Agent': USER_AGENT } },
+  headers: DEFAULT_HEADERS,
 });
 
 const genericParser = new Parser({
@@ -23,7 +30,7 @@ const genericParser = new Parser({
       ['media:thumbnail', 'mediaThumbnail'],
     ],
   },
-  requestOptions: { headers: { 'User-Agent': USER_AGENT } },
+  headers: DEFAULT_HEADERS,
 });
 
 const OZB_FEED_URL = 'https://www.ozbargain.com.au/deals/feed';
