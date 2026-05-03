@@ -550,3 +550,19 @@ Node.js >= 18 is required.
 - **Network:** Outbound HTTPS to `www.ozbargain.com.au` and your notification service endpoint(s). When gaming sources are enabled, also requires outbound HTTPS to `www.gamerpower.com` and/or `epicbundle.com`
 
 No accounts, API keys, or external services beyond the above are required.
+
+---
+
+## Troubleshooting
+
+### 403 / Cloudflare "Verify you are human" from OzBargain
+
+OzBargain uses Cloudflare to protect against bots. If you see `[ERROR] [fetcher] Failed to fetch OzBargain feed: Status code 403`, Cloudflare is blocking the request. Dealmaster uses a browser-like `User-Agent` header (Chrome on Windows) with proper `Accept` and `Accept-Language` headers to avoid being flagged.
+
+If the 403 persists, OzBargain may have deployed a JavaScript challenge (which cannot be solved without a real browser). In that case:
+
+1. Visit `https://www.ozbargain.com.au` in a browser on the same network — this may reduce the challenge frequency
+2. Check if the RSS feed is temporarily unavailable by visiting `https://www.ozbargain.com.au/deals/feed` in a browser
+3. Gaming sources (GamerPower, EpicBundle) are unaffected and will continue to deliver deals
+
+The container health check only monitors poll cycle freshness — a single OzBargain fetch failure will not mark the container unhealthy unless all enabled sources fail across multiple cycles.
