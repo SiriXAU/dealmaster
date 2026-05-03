@@ -16,16 +16,23 @@ Dealmaster monitors deal feeds and sends notifications via [Apprise](https://git
 
 ## Features
 
-- Polls the OzBargain RSS feed on a configurable interval
-- **Optional gaming sources** — GamerPower (Giveaways, Games, and Loot as separate feeds) and EpicBundle can each be toggled on/off independently from the web UI or via env vars
+- Polls OzBargain RSS feed and optional gaming sources on a configurable interval
+- **Optional gaming sources** — GamerPower (Giveaways, Games, and Loot as separate JSON API feeds) and EpicBundle (RSS) can each be toggled on/off independently from the web UI or via env vars
 - Sends notifications via Apprise to any supported service (Discord, Slack, Telegram, email, and more)
 - Discord URLs receive **rich embeds** — coloured card with source-specific branding, price, store, category, and relevant metadata
 - **Web settings UI** — change any setting live at `http://localhost:8080`, dark mode and mobile-friendly
-- Category, keyword, and minimum-vote filtering to reduce noise (gaming sources bypass the vote threshold since they don't use a voting system)
+- **Input validation** — settings POST endpoint validates all fields and returns structured error responses
+- Category, keyword, and minimum-vote filtering to reduce noise (gaming sources bypass the vote threshold)
+- **Content-based deduplication** — prevents re-notification when a deal is reposted with a different ID (hashes title + link + price)
 - Startup heartbeat — sends a notification for the most recent deal on launch so you know it's live
-- Persistent seen-deal tracking to prevent duplicate notifications across restarts
+- Persistent seen-deal tracking and content hash store to prevent duplicate notifications across restarts
+- **Notification history** — last 50 notified deals stored and viewable via `GET /api/history`
+- **Health endpoint** — `GET /health` returns JSON health status (200/503) based on poll cycle freshness
+- Retry logic with exponential backoff on feed fetch failures (5xx, 429, network errors)
+- Discord webhook rate limiting with `Retry-After` header handling
+- **Structured logging** — timestamped, levelled log output; configurable via `LOG_LEVEL` env var
 - Graceful shutdown on `SIGTERM`/`SIGINT` (plays well with `podman-compose down`)
-- Container health check via a polled timestamp file
+- **Test suite** — 51 unit tests across filter, fetcher, config, notifier, and store modules; `npm test`
 
 ---
 
@@ -48,13 +55,14 @@ services:
       - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-120}
       - MIN_VOTES=${MIN_VOTES:-0}
       - MAX_SEEN_DEALS=${MAX_SEEN_DEALS:-500}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
       # Optional gaming sources — remove or set to false to disable
       - GAMERPOWER_ENABLED=${GAMERPOWER_ENABLED:-false}
       - GAMERPOWER_GAMES_ENABLED=${GAMERPOWER_GAMES_ENABLED:-false}
       - GAMERPOWER_LOOT_ENABLED=${GAMERPOWER_LOOT_ENABLED:-false}
       - EPICBUNDLE_ENABLED=${EPICBUNDLE_ENABLED:-false}
     healthcheck:
-      test: ["CMD", "node", "-e", "try{const s=require('fs').statSync('/tmp/health');if(Date.now()-s.mtimeMs>600000)process.exit(1);}catch(e){process.exit(1);}"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>r.json()).then(j=>{if(!j.healthy)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 60s
       timeout: 5s
       start_period: 30s
@@ -96,7 +104,7 @@ Dealmaster includes a built-in settings UI served on port 8080 inside the contai
 | **Poll Interval** | How often to check all enabled feeds for new deals (minimum 30s) |
 | **Minimum Votes** | Only notify for OzBargain deals with at least this many votes (gaming sources are unaffected) |
 | **Max Seen Deals** | Memory cap for the deduplication store |
-| **Gaming Sources** | Toggle Game Deals, GamerPower (Giveaways / Games / Loot), and EpicBundle on/off independently |
+| **Gaming Sources** | Toggle GamerPower (Giveaways / Games / Loot) and EpicBundle on/off independently |
 
 Changes take effect **immediately** — the poll loop restarts with the new settings without restarting the container.
 
@@ -144,6 +152,18 @@ ssh -L 8080:localhost:8080 your-server
 
 ---
 
+## API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | HTML settings UI |
+| `GET` | `/api/settings` | Current configuration as JSON |
+| `POST` | `/api/settings` | Save new configuration (validated, returns `{error, field}` on failure) |
+| `GET` | `/api/history` | Last 50 notified deals as JSON array |
+| `GET` | `/health` | Health status — `{"healthy":true,"lastPollMsAgo":…}` (200/503) |
+
+---
+
 ## Environment Variables
 
 These control initial configuration and serve as fallback values once the web UI has been used to save settings.
@@ -152,10 +172,11 @@ These control initial configuration and serve as fallback values once the web UI
 |---|---|---|---|
 | `APPRISE_URLS` | **Yes** (first run) | — | Comma-separated list of Apprise notification URLs |
 | `CATEGORIES` | No | _(all)_ | Comma-separated category filter (see below) |
-| `KEYWORDS` | No | _(all)_ | Comma-separated keyword filter — matches title, description, and store name (see below) |
+| `KEYWORDS` | No | _(all)_ | Comma-separated keyword filter — matches title, description, and store name |
 | `POLL_INTERVAL_SECONDS` | No | `120` | Seconds between feed checks — minimum `30` |
 | `MIN_VOTES` | No | `0` | Minimum OzBargain vote count required to notify (does not affect gaming sources) |
 | `MAX_SEEN_DEALS` | No | `500` | Maximum deal IDs to retain in the persistence store |
+| `LOG_LEVEL` | No | `info` | Log verbosity: `debug`, `info`, `warn`, or `error` |
 | `GAMERPOWER_ENABLED` | No | `false` | Set to `true` to enable the GamerPower all-giveaways feed |
 | `GAMERPOWER_GAMES_ENABLED` | No | `false` | Set to `true` to enable the GamerPower full-games-only feed |
 | `GAMERPOWER_LOOT_ENABLED` | No | `false` | Set to `true` to enable the GamerPower loot/DLC-only feed |
@@ -178,7 +199,7 @@ These control initial configuration and serve as fallback values once the web UI
 | Pushover | `pover://user@token` |
 | Gotify | `gotify://hostname/token` |
 
-> **Discord tip:** The webhook URL `https://discord.com/api/webhooks/1234/abcd` maps to `discord://1234/abcd`. Discord URLs receive **rich embeds** (coloured card with inline fields and thumbnail) sent directly via the webhook API — identical in appearance to the native Discord bot format. All other Apprise URLs receive a plain-text notification via the Apprise CLI.
+> **Discord tip:** The webhook URL `https://discord.com/api/webhooks/1234/abcd` maps to `discord://1234/abcd`. Discord URLs receive **rich embeds** (coloured card with inline fields and thumbnail) sent directly via the webhook API — identical in appearance to the native Discord bot format. Discord notifications include per-webhook rate limiting (1s minimum interval) and automatic 429 retry handling. All other Apprise URLs receive a plain-text notification via the Apprise CLI.
 
 See the [Apprise wiki](https://github.com/caronc/apprise/wiki) for all supported services and URL formats.
 
@@ -240,7 +261,7 @@ Leave `KEYWORDS` empty (the default) to receive all deals regardless of content.
 Both filters apply together — a deal must satisfy **all** active filters:
 
 ```
-notify if:  matches_category  AND  matches_keyword  AND  meets_min_votes
+notify if:  matches_category  AND  matches_keyword  AND  meets_min_votes  AND  not_seen_before
 ```
 
 So `CATEGORIES=Gaming` + `KEYWORDS=Free` will only notify for free deals in the Gaming category.
@@ -317,7 +338,7 @@ On every start Dealmaster:
 2. Starts the web settings UI
 3. Fetches the current feed from OzBargain and any enabled gaming sources (in parallel)
 4. Sends a notification for the single most recent (filtered) deal across all sources as a liveness signal
-5. Marks all current feed items as seen
+5. Marks all current feed items and their content hashes as seen
 6. Enters the regular poll loop
 
 This means you always receive a startup notification confirming the tool is running, and the first real poll will only notify on deals that appear *after* that point.
@@ -326,14 +347,17 @@ This means you always receive a startup notification confirming the tool is runn
 
 ## Persistence
 
-Two files are stored in `$DATA_DIR` (default `/data`), persisted via the named Docker volume:
+Three files are stored in `$DATA_DIR` (default `/data`), persisted via the named Docker volume:
 
 | File | Purpose |
 |---|---|
-| `seen-deals.json` | Set of deal IDs already notified — prevents duplicates across restarts |
 | `settings.json` | Settings saved via the web UI — takes precedence over env vars on startup |
+| `seen-deals.json` | Deal IDs and content hashes already notified — prevents duplicates across restarts |
+| `history.json` | Last 50 notified deals with titles, links, sources, and timestamps |
 
 The seen-deal store is capped at `MAX_SEEN_DEALS` entries (default: `500`). When the cap is reached, the oldest entries are trimmed. With a 2-minute poll interval and typical OzBargain posting volume this is more than enough to prevent duplicates indefinitely.
+
+Content hashes (SHA-256 of title + link + price) provide a second layer of deduplication — if a deal is reposted with a different ID, it won't trigger a duplicate notification within a 24-hour window.
 
 **Resetting seen deals** (to re-notify on all current deals):
 ```bash
@@ -348,7 +372,15 @@ podman-compose up -d
 
 ## Health Check
 
-After startup and after every poll cycle, Dealmaster writes a timestamp to `/tmp/health` inside the container. The health check defined in `docker-compose.yml` verifies that file has been updated within the last 10 minutes. If the poll loop stalls or crashes, the container will be marked unhealthy.
+Dealmaster exposes a `GET /health` HTTP endpoint that returns the health status:
+
+```json
+{"healthy":true,"lastPollMsAgo":45000,"pollIntervalMs":120000}
+```
+
+A poll cycle is considered healthy if it completed within 3× the configured poll interval. The status code is `200` when healthy and `503` when stale.
+
+The health check defined in `docker-compose.yml` calls this endpoint. If the poll loop stalls or crashes, the container will be marked unhealthy.
 
 ```bash
 # Check health status (replace <container-name> with the actual container name)
@@ -359,6 +391,28 @@ podman ps
 ```
 
 Possible statuses: `starting` (within the 30s start period), `healthy`, `unhealthy`.
+
+---
+
+## Logging
+
+Log output includes an ISO timestamp, severity level, and module name:
+
+```
+2026-05-03T10:30:00.000Z [INFO] [monitor] Poll loop started (interval: 120s)
+2026-05-03T10:30:00.000Z [WARN] [fetcher] Retry 1/3 for epicbundle in 1000ms (HTTP 503)
+```
+
+Set `LOG_LEVEL` to control verbosity:
+
+| Level | Shows |
+|---|---|
+| `debug` | Everything including retry attempts and detailed fetch info |
+| `info` | Startup banner, poll cycles, new deal notifications, settings saves |
+| `warn` | Transient errors, retries, rate limits |
+| `error` | Fatal errors only |
+
+The default is `info`.
 
 ---
 
@@ -376,43 +430,48 @@ Possible statuses: `starting` (within the 30s start period), `healthy`, `unhealt
 │  GET /               │        │  startMonitor() — heartbeat   │
 │  GET /api/settings   │        │  + seed on startup            │
 │  POST /api/settings  │        │  startPollLoop() — interval   │
-│  → restarts poll     │        │  runOnce() — fetch→filter     │
-│    loop on save      │        │  →diff→notify→persist→health  │
+│  GET /api/history    │        │  runOnce() — fetch→filter     │
+│  GET /health         │        │  →dedupe→notify→persist       │
 └──────────┬───────────┘        └──────┬────────────────────────┘
            │                           │
 ┌──────────▼───────────┐     ┌─────────▼──────────────────────┐  ┌─────────────────┐
 │     settings.js      │     │          fetcher.js             │  │   notifier.js   │
 │  load/save           │     │  fetchAllDeals(config)          │  │  Apprise CLI /  │
 │  settings.json       │     │  ├─ OzBargain RSS (always)          │  │  Discord embed  │
-└──────────────────────┘     │  ├─ gamerpower/giveaways (if ena.)  │  │  (per-source    │
-                             │  ├─ gamerpower/games   (if enabled) │  │   branding)     │
+└──────────────────────┘     │  ├─ gamerpower/giveaways (if ena.)  │  │  + rate limit   │
+                             │  ├─ gamerpower/games   (if enabled) │  │  + 429 retry    │
                              │  ├─ gamerpower/loot    (if enabled) │  └─────────────────┘
                              │  └─ epicbundle.com    (if enabled)  │
                              └─────────┬──────────────────────────┘
-                                       │ parallel fetch, flat array
+                                       │ retry with backoff
                              ┌─────────▼──────┐
                              │   filter.js    │
                              │  category +    │
                              │  keyword +     │
                              │  vote filter   │
-                             │  (votes skipped│
-                             │  for gaming)   │
                              └─────────┬──────┘
                                        │
+                             ┌─────────▼──────────┐
+                             │     store.js       │
+                             │  seen-deals.json   │
+                             │  IDs + hash→ts     │
+                             │  content dedup 24h │
+                             └─────────┬──────────┘
+                                       │
                              ┌─────────▼──────┐
-                             │    store.js    │
-                             │  seen-deals    │
-                             │  .json R/W     │
+                             │   history.js   │
+                             │  history.json  │
+                             │  last 50 deals │
                              └────────────────┘
 ```
 
 1. `index.js` loads `settings.json` (if present) then builds config, starts the web UI, registers shutdown handlers, and calls `startMonitor()`
-2. On startup, `monitor.js` fetches all enabled sources, sends a startup notification for the most recent deal, marks everything as seen, then starts the poll interval
-3. On each poll, `fetcher.js` calls `fetchAllDeals(config)` which fetches OzBargain plus any enabled gaming sources **in parallel**, normalising each item into a consistent deal shape. GamerPower is fetched via their JSON API; EpicBundle uses RSS. Gaming items carry a `type` field (`Freebie` or `Bundle`) and `votes: 0`
+2. On startup, `monitor.js` fetches all enabled sources, sends a startup notification for the most recent deal, seeds all items and content hashes as seen, then starts the poll interval
+3. On each poll, `fetcher.js` calls `fetchAllDeals(config)` which fetches OzBargain plus any enabled gaming sources **in parallel**, normalising each item into a consistent deal shape. Failed fetches are retried with exponential backoff (up to 3 attempts). GamerPower is fetched via their JSON API; EpicBundle uses RSS
 4. `filter.js` applies the category whitelist and keyword filter to all sources; the minimum vote threshold is only applied to OzBargain deals
-5. `store.js` loads the persisted set of seen deal IDs and filters out already-seen deals
-6. `notifier.js` sends a notification for each new deal — Discord embeds use per-source branding and a layout adapted to the available fields; all other URLs use the Apprise CLI
-7. Updated seen IDs are written back to disk and `/tmp/health` is touched
+5. `store.js` loads the persisted set of seen deal IDs and content hashes, filters out already-seen deals and content-duplicate deals (within a 24h window)
+6. `notifier.js` sends a notification for each new deal — Discord embeds use per-source branding with rate limiting (1s minimum interval, automatic 429 retry); all other URLs use the Apprise CLI
+7. Newly seen IDs and content hashes are written back to disk, a history entry is appended, and `/tmp/health` is touched
 8. When settings are saved via the web UI, `settings.js` validates and writes `settings.json`, the config is rebuilt, and the poll interval restarts with the new settings — no container restart needed
 
 ---
@@ -425,16 +484,46 @@ dealmaster/
 ├── src/
 │   ├── config.js         # Config loading — settings.json → env var → default
 │   ├── settings.js       # Load/save settings.json with validation
-│   ├── web.js            # HTTP settings UI (port 8080) and /api/settings routes
-│   ├── fetcher.js        # Feed fetching and deal normalisation (OzBargain RSS, GamerPower JSON API, EpicBundle RSS)
+│   ├── web.js            # HTTP server — settings UI, /api/*, /health
+│   ├── fetcher.js        # Feed fetching with retry — OzBargain RSS, GamerPower JSON API, EpicBundle RSS
 │   ├── filter.js         # Category, keyword, and vote filtering
-│   ├── monitor.js        # Poll loop, startup heartbeat, health file
-│   ├── notifier.js       # Apprise CLI + Discord embed notification sender
-│   └── store.js          # Seen-deal ID persistence (JSON on disk)
+│   ├── monitor.js        # Poll loop, startup heartbeat, health tracking
+│   ├── notifier.js       # Discord embed + Apprise CLI sender with rate limiting
+│   ├── store.js          # Seen-deal + content-hash persistence (JSON on disk)
+│   ├── history.js        # Notification history log (last 50 deals)
+│   └── logger.js         # Structured logging with timestamps and levels
+├── test/
+│   ├── filter.test.js    # Filter unit tests
+│   ├── fetcher.test.js   # Normalization unit tests
+│   ├── config.test.js    # Config loading tests
+│   ├── notifier.test.js  # Discord URL parsing + embed building tests
+│   └── store.test.js     # Content hash + persistence tests
 ├── Dockerfile            # node:22-alpine image with Python3 + apprise
-├── docker-compose.yml    # Compose definition with healthcheck and web port
-└── .env.example          # Environment variable template
+├── docker-compose.yml    # Compose definition with HTTP healthcheck and web port
+├── .env.example          # Environment variable template
+├── .gitignore
+└── .dockerignore
 ```
+
+---
+
+## Development
+
+```bash
+# Install dependencies
+npm install
+
+# Run tests (51 tests across 5 suites)
+npm test
+
+# Run the app locally (needs APPRISE_URLS set)
+APPRISE_URLS=discord://id/token node index.js
+
+# Run with debug logging
+LOG_LEVEL=debug APPRISE_URLS=discord://id/token node index.js
+```
+
+Node.js >= 18 is required.
 
 ---
 

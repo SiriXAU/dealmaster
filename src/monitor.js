@@ -1,14 +1,25 @@
 import fs from 'fs';
+import { createLogger } from './logger.js';
 import { fetchAllDeals } from './fetcher.js';
 import { filterDeals } from './filter.js';
-import { loadSeenIds, saveSeenIds } from './store.js';
+import { loadSeenDeals, saveSeenDeals, contentHash } from './store.js';
 import { sendDealNotification, sleep } from './notifier.js';
+import { addToHistory } from './history.js';
+
+const log = createLogger('monitor');
 
 const HEALTH_FILE = '/tmp/health';
 
+let lastSuccessfulPoll = 0;
+
+export function getLastPollTime() {
+  return lastSuccessfulPoll;
+}
+
 function touchHealth() {
+  lastSuccessfulPoll = Date.now();
   try {
-    fs.writeFileSync(HEALTH_FILE, String(Date.now()));
+    fs.writeFileSync(HEALTH_FILE, String(lastSuccessfulPoll));
   } catch {
     // non-fatal
   }
@@ -31,10 +42,10 @@ export function startPollLoop(config) {
     try {
       await runOnce(config);
     } catch (err) {
-      console.error(`[monitor] Unexpected error during poll: ${err.message}`);
+      log.error(`Unexpected error during poll: ${err.message}`);
     }
   }, config.pollIntervalMs);
-  console.log(`[monitor] Poll loop started (interval: ${config.pollIntervalMs / 1000}s)`);
+  log.info(`Poll loop started (interval: ${config.pollIntervalMs / 1000}s)`);
 }
 
 /**
@@ -49,33 +60,44 @@ export async function runOnce(config) {
   if (deals.length === 0) return 0;
 
   const filtered = filterDeals(deals, config);
-  const seenIds = await loadSeenIds(config.dataDir);
+  const { ids: seenIds, hashes } = await loadSeenDeals(config.dataDir);
 
-  const newDeals = filtered.filter(deal => !seenIds.has(deal.id));
+  const now = Date.now();
+  const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+  const newDeals = filtered.filter(deal => {
+    if (seenIds.has(deal.id)) return false;
+    const hash = contentHash(deal);
+    const seenAt = hashes.get(hash);
+    if (seenAt && (now - seenAt) < DEDUP_WINDOW_MS) return false;
+    return true;
+  });
 
   if (newDeals.length > 0) {
-    console.log(`[monitor] Found ${newDeals.length} new deal(s) — sending notifications...`);
+    log.info(`Found ${newDeals.length} new deal(s) — sending notifications...`);
   }
 
   let notified = 0;
   for (const deal of newDeals) {
     seenIds.add(deal.id);
-    const ok = await sendDealNotification(deal, config);
+    const { ok } = await sendDealNotification(deal, config);
     if (ok) {
       notified++;
-      console.log(`[monitor] Notified: ${deal.title} [${deal.category}] (+${deal.votes})`);
+      await addToHistory(config.dataDir, deal);
+      log.info(`Notified: ${deal.title} [${deal.category}] (+${deal.votes})`);
     }
     if (newDeals.indexOf(deal) < newDeals.length - 1) {
       await sleep(INTER_POST_DELAY_MS);
     }
   }
 
-  // Mark all (unfiltered) deals as seen so we don't re-evaluate them next cycle
+  // Mark all deals (including filtered) as seen, and record content hashes
   for (const deal of deals) {
     seenIds.add(deal.id);
+    hashes.set(contentHash(deal), now);
   }
 
-  await saveSeenIds(seenIds, config.dataDir, config.maxSeenDeals);
+  await saveSeenDeals(seenIds, hashes, config.dataDir, config.maxSeenDeals);
   touchHealth();
   return notified;
 }
@@ -90,22 +112,24 @@ export async function runOnce(config) {
 export async function startMonitor(config) {
   const deals = await fetchAllDeals(config);
   const filtered = filterDeals(deals, config);
-  const seenIds = await loadSeenIds(config.dataDir);
+  const { ids: seenIds, hashes } = await loadSeenDeals(config.dataDir);
 
   if (filtered.length > 0) {
     const latest = filtered[0];
-    console.log(`[monitor] Sending startup deal: ${latest.title}`);
+    log.info(`Sending startup deal: ${latest.title}`);
     await sendDealNotification(latest, config);
   }
 
   // Seed all current deals as seen so the first real poll only catches new ones
+  const now = Date.now();
   for (const deal of deals) {
     seenIds.add(deal.id);
+    hashes.set(contentHash(deal), now);
   }
-  await saveSeenIds(seenIds, config.dataDir, config.maxSeenDeals);
+  await saveSeenDeals(seenIds, hashes, config.dataDir, config.maxSeenDeals);
   touchHealth();
 
-  console.log(`[monitor] Ready. Watching for new deals every ${config.pollIntervalMs / 1000}s...`);
+  log.info(`Ready. Watching for new deals every ${config.pollIntervalMs / 1000}s...`);
 
   startPollLoop(config);
 }

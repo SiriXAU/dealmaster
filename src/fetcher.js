@@ -1,4 +1,7 @@
 import Parser from 'rss-parser';
+import { createLogger } from './logger.js';
+
+const log = createLogger('fetcher');
 
 const USER_AGENT = 'Mozilla/5.0 (compatible; dealmaster/1.0; +https://github.com/SiriXAU/dealmaster)';
 
@@ -33,38 +36,83 @@ export const GAMING_FEED_URLS = {
 };
 
 /**
+ * Retries an async operation with exponential backoff.
+ * Retries on network errors, 5xx responses, and 429 rate limits.
+ * @param {Function} fn - Async function to retry
+ * @param {string} label - Log label for the operation
+ * @param {{ maxRetries?: number, baseDelay?: number }} options
+ * @returns {Promise<any>} Result of fn, or throws on exhaustion
+ */
+async function retryWithBackoff(fn, label, { maxRetries = 3, baseDelay = 1000 } = {}) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const isRetryable =
+        err.message?.includes('HTTP 5') ||
+        err.message?.includes('HTTP 429') ||
+        err.name === 'TypeError' || // network errors
+        err.code === 'ECONNRESET' ||
+        err.code === 'ETIMEDOUT' ||
+        err.code === 'ENOTFOUND';
+
+      if (!isRetryable || attempt === maxRetries) throw err;
+
+      const delay = baseDelay * Math.pow(2, attempt);
+      log.warn(`Retry ${attempt + 1}/${maxRetries} for ${label} in ${delay}ms (${err.message})`);
+      await sleep(delay);
+    }
+  }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ── Fetch functions ────────────────────────────────────────────────────────────
+
+/**
  * Fetches and parses the OzBargain RSS feed.
  * @returns {Promise<Array>} Array of normalized deal objects, or [] on error.
  */
 export async function fetchDeals() {
   try {
-    const feed = await ozbParser.parseURL(OZB_FEED_URL);
+    const feed = await retryWithBackoff(
+      () => ozbParser.parseURL(OZB_FEED_URL),
+      'ozbargain'
+    );
     return feed.items.map(normalizeOzbItem);
   } catch (err) {
-    console.error(`[fetcher] Failed to fetch OzBargain feed: ${err.message}`);
+    log.error(`Failed to fetch OzBargain feed: ${err.message}`);
     return [];
   }
 }
 
 async function fetchRssFeed(sourceId, url) {
   try {
-    const feed = await genericParser.parseURL(url);
+    const feed = await retryWithBackoff(
+      () => genericParser.parseURL(url),
+      sourceId
+    );
     return feed.items.map(item => normalizeGamingItem(item, sourceId));
   } catch (err) {
-    console.error(`[fetcher] Failed to fetch ${sourceId} feed: ${err.message}`);
+    log.error(`Failed to fetch ${sourceId} feed: ${err.message}`);
     return [];
   }
 }
 
 async function fetchGamerPower(sourceId, apiUrl) {
   try {
-    const res = await fetch(apiUrl, { headers: { 'User-Agent': USER_AGENT } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (!Array.isArray(data)) return [];
+    const data = await retryWithBackoff(async () => {
+      const res = await fetch(apiUrl, { headers: { 'User-Agent': USER_AGENT } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (!Array.isArray(json)) throw new Error('Non-array response');
+      return json;
+    }, sourceId);
     return data.map(item => normalizeGamerPowerItem(item, sourceId));
   } catch (err) {
-    console.error(`[fetcher] Failed to fetch ${sourceId} feed: ${err.message}`);
+    log.error(`Failed to fetch ${sourceId} feed: ${err.message}`);
     return [];
   }
 }
@@ -134,7 +182,7 @@ function extractDelivery(title) {
 /**
  * Normalizes a raw OzBargain RSS item into a consistent deal shape.
  */
-function normalizeOzbItem(item) {
+export function normalizeOzbItem(item) {
   const meta  = item.ozbMeta ?? {};
   const attrs = meta['$'] ?? {};
 
@@ -183,7 +231,7 @@ function extractMediaUrl(item) {
 }
 
 /**
- * Normalizes a raw RSS gaming item (game-deals, epicbundle) into a consistent deal shape.
+ * Normalizes a raw RSS gaming item (epicbundle) into a consistent deal shape.
  */
 function normalizeGamingItem(item, sourceId) {
   const title   = item.title ?? 'Unknown Deal';
@@ -212,7 +260,7 @@ function normalizeGamingItem(item, sourceId) {
  * Normalizes a GamerPower JSON API item into a consistent deal shape.
  * API docs: https://www.gamerpower.com/api-read
  */
-function normalizeGamerPowerItem(item, sourceId) {
+export function normalizeGamerPowerItem(item, sourceId) {
   const worth   = item.worth === 'N/A' ? null : item.worth;
   const endDate = item.end_date === 'N/A' ? null : item.end_date;
   const type    = 'Freebie';
