@@ -5,6 +5,7 @@ import { filterDeals } from './filter.js';
 import { loadSeenDeals, saveSeenDeals, contentHash } from './store.js';
 import { sendDealNotification, sleep } from './notifier.js';
 import { addToHistory } from './history.js';
+import { logDeals } from './dealLog.js';
 
 const log = createLogger('monitor');
 
@@ -78,11 +79,13 @@ export async function runOnce(config) {
   }
 
   let notified = 0;
+  const notifiedIds = new Set();
   for (const deal of newDeals) {
     seenIds.add(deal.id);
     const { ok } = await sendDealNotification(deal, config);
     if (ok) {
       notified++;
+      notifiedIds.add(deal.id);
       await addToHistory(config.dataDir, deal);
       log.info(`Notified: ${deal.title} [${deal.category}] (+${deal.votes})`);
     }
@@ -98,6 +101,7 @@ export async function runOnce(config) {
   }
 
   await saveSeenDeals(seenIds, hashes, config.dataDir, config.maxSeenDeals);
+  await logDeals(config.dataDir, deals, filtered, seenIds, hashes, notifiedIds, config);
   touchHealth();
   return notified;
 }
