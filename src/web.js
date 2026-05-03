@@ -144,6 +144,59 @@ const HTML = `<!DOCTYPE html>
     @media (prefers-color-scheme: dark) {
       [data-chip][data-active="false"] { background:#3f3f46; color:#d4d4d8; border-color:#52525b; }
     }
+
+    /* ── Tabs ─────────────────────────────────────────────────────────── */
+    .tab-bar { display: flex; gap: 0; border-bottom: 1px solid #e4e4e7; }
+    @media (prefers-color-scheme: dark) { .tab-bar { border-color: #3f3f46; } }
+    .tab-btn {
+      flex: 1; padding: 10px 16px; font-size: 13px; font-weight: 500;
+      border: none; background: none; cursor: pointer;
+      color: #71717a; border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab-btn:hover { color: #3f3f46; }
+    @media (prefers-color-scheme: dark) { .tab-btn:hover { color: #d4d4d8; } }
+    .tab-btn.active { color: #FF6600; border-bottom-color: #FF6600; }
+
+    /* ── Deal cards ───────────────────────────────────────────────────── */
+    .deal-card {
+      display: flex; flex-direction: column; gap: 6px;
+      padding: 14px 16px;
+      border-bottom: 1px solid #f4f4f5;
+      transition: background 0.1s;
+    }
+    @media (prefers-color-scheme: dark) { .deal-card { border-color: #27272a; } }
+    .deal-card:hover { background: #fafafa; }
+    @media (prefers-color-scheme: dark) { .deal-card:hover { background: #27272a; } }
+
+    .deal-title {
+      font-size: 13px; font-weight: 500; line-height: 1.4;
+      color: #18181b; text-decoration: none;
+    }
+    .deal-title:hover { color: #FF6600; }
+    @media (prefers-color-scheme: dark) { .deal-title { color: #f4f4f5; } }
+
+    .deal-meta {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      font-size: 11px; color: #71717a;
+    }
+    @media (prefers-color-scheme: dark) { .deal-meta { color: #a1a1aa; } }
+
+    .source-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+
+    .filter-badge {
+      font-size: 10px; padding: 2px 7px; border-radius: 9999px;
+      font-weight: 500; white-space: nowrap;
+    }
+    .filter-badge.ok { background: #dcfce7; color: #166534; }
+    .filter-badge.skip { background: #f4f4f5; color: #71717a; }
+    @media (prefers-color-scheme: dark) {
+      .filter-badge.ok { background: #14532d; color: #86efac; }
+      .filter-badge.skip { background: #27272a; color: #a1a1aa; }
+    }
+
+    .deals-empty { text-align: center; padding: 48px 16px; color: #a1a1aa; font-size: 13px; }
+    .deals-empty svg { width: 40px; height: 40px; margin: 0 auto 12px; opacity: 0.3; }
   </style>
 </head>
 <body class="min-h-screen font-sans text-zinc-900 dark:text-zinc-100 antialiased">
@@ -171,7 +224,15 @@ const HTML = `<!DOCTYPE html>
     </div>
   </header>
 
-  <main class="max-w-2xl mx-auto px-6 py-8 space-y-4">
+  <div class="max-w-2xl mx-auto">
+    <nav class="tab-bar px-6">
+      <button class="tab-btn active" data-tab="settings">Settings</button>
+      <button class="tab-btn" data-tab="deals">Recent Deals <span id="deal-count" class="text-zinc-400 text-xs">(-)</span></button>
+    </nav>
+  </div>
+
+  <!-- Settings panel -->
+  <main id="panel-settings" class="max-w-2xl mx-auto px-6 py-8 space-y-4">
 
     <!-- Success banner -->
     <div id="banner-success" class="hidden items-center gap-3 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/70 rounded-xl px-4 py-3 text-sm text-emerald-800 dark:text-emerald-300">
@@ -380,7 +441,22 @@ const HTML = `<!DOCTYPE html>
 
   </main>
 
-  <div class="max-w-2xl mx-auto px-6 pb-8">
+  <!-- Recent Deals panel -->
+  <div id="panel-deals" class="max-w-2xl mx-auto px-6 py-6 hidden">
+    <div class="bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-2xl overflow-hidden shadow-sm">
+      <div id="deals-list"></div>
+      <div id="deals-empty" class="deals-empty hidden">
+        <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
+        </svg>
+        <p>No deals in the last 24 hours</p>
+        <p class="text-xs mt-1">Deals will appear here after the first poll cycle.</p>
+      </div>
+    </div>
+    <p class="text-xs text-zinc-300 dark:text-zinc-600 text-center mt-4">Showing deals from the last 24 hours</p>
+  </div>
+
+  <div id="panel-settings-footer" class="max-w-2xl mx-auto px-6 pb-8">
     <p class="text-xs text-zinc-300 dark:text-zinc-600 text-center">dealmaster &middot; settings</p>
   </div>
 
@@ -590,12 +666,136 @@ const HTML = `<!DOCTYPE html>
           saveBtn.textContent = 'Save settings';
         });
     });
+
+    // ── Tab switching ──────────────────────────────────────────────────────
+    var tabBtns        = document.querySelectorAll('[data-tab]');
+    var panelSettings  = document.getElementById('panel-settings');
+    var panelDeals     = document.getElementById('panel-deals');
+    var panelFooter    = document.getElementById('panel-settings-footer');
+    var dealCount      = document.getElementById('deal-count');
+    var dealsList      = document.getElementById('deals-list');
+    var dealsEmpty     = document.getElementById('deals-empty');
+
+    tabBtns.forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var tab = this.dataset.tab;
+        tabBtns.forEach(function(b) { b.classList.remove('active'); });
+        this.classList.add('active');
+        if (tab === 'settings') {
+          panelSettings.classList.remove('hidden');
+          panelDeals.classList.add('hidden');
+          panelFooter.classList.remove('hidden');
+        } else {
+          panelSettings.classList.add('hidden');
+          panelDeals.classList.remove('hidden');
+          panelFooter.classList.add('hidden');
+          loadDeals();
+        }
+      });
+    });
+
+    // ── Relative time ─────────────────────────────────────────────────────
+    function timeAgo(iso) {
+      var then = new Date(iso).getTime();
+      var diff = Date.now() - then;
+      var sec  = Math.floor(diff / 1000);
+      if (sec < 60) return 'just now';
+      var min = Math.floor(sec / 60);
+      if (min < 60) return min + ' min ago';
+      var hrs = Math.floor(min / 60);
+      if (hrs < 24) return hrs + ' hour' + (hrs > 1 ? 's' : '') + ' ago';
+      var days = Math.floor(hrs / 24);
+      return days + ' day' + (days > 1 ? 's' : '') + ' ago';
+    }
+
+    // ── Source helpers ────────────────────────────────────────────────────
+    var SOURCE_COLORS = {
+      ozbargain: '#FF6600',
+      gamerpower: '#EF4444',
+      'gamerpower-games': '#EF4444',
+      'gamerpower-loot': '#EF4444',
+      epicbundle: '#8B5CF6',
+    };
+
+    function sourceName(source) {
+      var map = {
+        ozbargain: 'OzBargain',
+        gamerpower: 'GamerPower',
+        'gamerpower-games': 'GamerPower·Games',
+        'gamerpower-loot': 'GamerPower·Loot',
+        epicbundle: 'EpicBundle',
+      };
+      return map[source] || source || 'Unknown';
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function escapeAttr(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // ── Render deals ──────────────────────────────────────────────────────
+    function renderDeals(deals) {
+      if (!deals || deals.length === 0) {
+        dealsList.innerHTML = '';
+        dealsEmpty.classList.remove('hidden');
+        dealCount.textContent = '(0)';
+        return;
+      }
+      dealsEmpty.classList.add('hidden');
+      dealCount.textContent = '(' + deals.length + ')';
+
+      var html = '';
+      deals.forEach(function(d) {
+        var dot   = SOURCE_COLORS[d.source] || '#a1a1aa';
+        var badge = d.wasNotified
+          ? '<span class="filter-badge ok">Notified</span>'
+          : '<span class="filter-badge skip">Skipped' + (d.filterReason ? ': ' + escapeHtml(d.filterReason) : '') + '</span>';
+        var title = d.title || 'Untitled';
+        var link  = d.link || '';
+        var titleHtml = link
+          ? '<a class="deal-title" href="' + escapeAttr(link) + '" target="_blank" rel="noopener">' + escapeHtml(title) + '</a>'
+          : '<span class="deal-title">' + escapeHtml(title) + '</span>';
+        var meta = [];
+        if (d.price) meta.push(d.price);
+        if (d.store) meta.push(d.store);
+        if (d.votes != null) meta.push('+' + d.votes + ' votes');
+
+        html += '<div class="deal-card">' +
+          titleHtml +
+          '<div class="deal-meta">' +
+            '<span class="source-dot" style="background:' + dot + '"></span>' +
+            '<span>' + sourceName(d.source) + '</span>' +
+            (d.category ? '<span>' + escapeHtml(d.category) + '</span>' : '') +
+            (meta.length ? '<span>' + meta.join(' · ') + '</span>' : '') +
+            badge +
+            '<span>' + timeAgo(d.fetchedAt) + '</span>' +
+          '</div>' +
+        '</div>';
+      });
+      dealsList.innerHTML = html;
+    }
+
+    // ── Load deals from API ───────────────────────────────────────────────
+    function loadDeals() {
+      fetch('/api/deals')
+        .then(function(r) { return r.json(); })
+        .then(renderDeals)
+        .catch(function() {
+          dealsList.innerHTML = '';
+          dealsEmpty.classList.remove('hidden');
+          dealsEmpty.querySelector('p').textContent = 'Failed to load deals.';
+          dealCount.textContent = '(-)';
+        });
+    }
   </script>
 
 </body>
 </html>`;
 
-export function startWebServer({ port, getConfig, getMeta, getLastPollTime, getHistory, onSettingsSaved }) {
+export function startWebServer({ port, getConfig, getMeta, getLastPollTime, getHistory, getDealLog, onSettingsSaved }) {
   const server = http.createServer(async (req, res) => {
     const { method, url } = req;
 
@@ -638,6 +838,12 @@ export function startWebServer({ port, getConfig, getMeta, getLastPollTime, getH
       if (method === 'GET' && url === '/api/history') {
         const history = await getHistory();
         jsonResponse(res, 200, history);
+        return;
+      }
+
+      if (method === 'GET' && url === '/api/deals') {
+        const deals = await getDealLog();
+        jsonResponse(res, 200, deals);
         return;
       }
 

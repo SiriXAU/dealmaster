@@ -27,6 +27,7 @@ Dealmaster monitors deal feeds and sends notifications via [Apprise](https://git
 - Startup heartbeat — sends a notification for the most recent deal on launch so you know it's live
 - Persistent seen-deal tracking and content hash store to prevent duplicate notifications across restarts
 - **Notification history** — last 50 notified deals stored and viewable via `GET /api/history`
+- **Recent Deals tab** — web UI tab showing all deals (notified and filtered) from the last 24 hours with filter reasons
 - **Health endpoint** — `GET /health` returns JSON health status (200/503) based on poll cycle freshness
 - Retry logic with exponential backoff on feed fetch failures (5xx, 429, network errors)
 - Discord webhook rate limiting with `Retry-After` header handling
@@ -108,6 +109,18 @@ Dealmaster includes a built-in settings UI served on port 8080 inside the contai
 
 Changes take effect **immediately** — the poll loop restarts with the new settings without restarting the container.
 
+### Recent Deals tab
+
+The **Recent Deals** tab shows all deals fetched in the last 24 hours, including those that were filtered out. Each deal card displays:
+
+- **Title** (linked to the deal page)
+- **Source** with colour-coded dot (orange for OzBargain, red for GamerPower, purple for EpicBundle)
+- **Price, store, votes, and category**
+- **Filter status** — green "Notified" badge or grey "Skipped" badge with the reason (e.g. "below min votes: 3 < 5", "category mismatch", "already seen")
+- **Relative timestamp** (e.g. "12 min ago", "2 hours ago")
+
+This is useful for seeing what deals are being filtered and tuning your settings without checking multiple notification channels.
+
 ### Settings persistence
 
 When you save via the web UI, settings are written to `$DATA_DIR/settings.json` (inside the data volume). On subsequent container restarts, this file takes precedence over all environment variables.
@@ -160,6 +173,7 @@ ssh -L 8080:localhost:8080 your-server
 | `GET` | `/api/settings` | Current configuration as JSON |
 | `POST` | `/api/settings` | Save new configuration (validated, returns `{error, field}` on failure) |
 | `GET` | `/api/history` | Last 50 notified deals as JSON array |
+| `GET` | `/api/deals` | All deals from the last 24 hours with filter/notify status |
 | `GET` | `/health` | Health status — `{"healthy":true,"lastPollMsAgo":…}` (200/503) |
 
 ---
@@ -354,6 +368,7 @@ Three files are stored in `$DATA_DIR` (default `/data`), persisted via the named
 | `settings.json` | Settings saved via the web UI — takes precedence over env vars on startup |
 | `seen-deals.json` | Deal IDs and content hashes already notified — prevents duplicates across restarts |
 | `history.json` | Last 50 notified deals with titles, links, sources, and timestamps |
+| `deal-log.json` | All deals from the last 24 hours — notified and filtered — for the Recent Deals web UI tab |
 
 The seen-deal store is capped at `MAX_SEEN_DEALS` entries (default: `500`). When the cap is reached, the oldest entries are trimmed. With a 2-minute poll interval and typical OzBargain posting volume this is more than enough to prevent duplicates indefinitely.
 
@@ -491,6 +506,7 @@ dealmaster/
 │   ├── notifier.js       # Discord embed + Apprise CLI sender with rate limiting
 │   ├── store.js          # Seen-deal + content-hash persistence (JSON on disk)
 │   ├── history.js        # Notification history log (last 50 deals)
+│   ├── dealLog.js        # Deal activity log — all deals, filtered + notified (24h window)
 │   └── logger.js         # Structured logging with timestamps and levels
 ├── test/
 │   ├── filter.test.js    # Filter unit tests

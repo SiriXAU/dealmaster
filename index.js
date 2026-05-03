@@ -4,6 +4,7 @@ import { loadSettings, saveSettings } from './src/settings.js';
 import { startMonitor, startPollLoop, stopPollLoop, getLastPollTime } from './src/monitor.js';
 import { startWebServer } from './src/web.js';
 import { loadHistory } from './src/history.js';
+import { loadDealLog } from './src/dealLog.js';
 
 const log = createLogger('dealmaster');
 
@@ -50,6 +51,7 @@ startWebServer({
   getMeta:   () => ({ savedAt: currentSavedAt }),
   getLastPollTime,
   getHistory: () => loadHistory(dataDir),
+  getDealLog: () => loadDealLog(dataDir),
   onSettingsSaved: async (newSettings) => {
     const saved    = await saveSettings(dataDir, newSettings);
     currentSavedAt = saved.savedAt;
