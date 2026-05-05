@@ -95,9 +95,11 @@ export async function logDeals(dataDir, allDeals, filteredDeals, seenIds, hashes
       filterReason = 'notification failed';
     }
 
-    // Preserve the original fetchedAt so the UI always shows when dealmaster
-    // first discovered the deal, not the most recent poll cycle timestamp.
-    const fetchedAt = existingMap.get(deal.id)?.fetchedAt ?? new Date().toISOString();
+    // Timestamp priority:
+    // 1. fetchedAt from the deal log  — exact time dealmaster first saw it (within 24h)
+    // 2. pubDate from the feed        — when the deal was posted (for aged-out "already seen" deals)
+    // 3. now                          — genuinely new deal with no feed date
+    const fetchedAt = existingMap.get(deal.id)?.fetchedAt ?? deal.pubDate ?? new Date().toISOString();
 
     return {
       id:          deal.id,
