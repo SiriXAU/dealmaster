@@ -445,6 +445,11 @@ const HTML = `<!DOCTYPE html>
   <div id="panel-deals" class="max-w-2xl mx-auto px-6 py-6 hidden">
     <div class="bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-2xl overflow-hidden shadow-sm">
       <div id="deals-list"></div>
+      <div id="deals-pagination" style="display:none" class="flex items-center justify-between px-4 py-3 border-t border-zinc-100 dark:border-zinc-700/60">
+        <button id="prev-page" class="text-xs px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">&larr; Prev</button>
+        <span id="page-info" class="text-xs text-zinc-400 dark:text-zinc-500"></span>
+        <button id="next-page" class="text-xs px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">Next &rarr;</button>
+      </div>
       <div id="deals-empty" class="deals-empty hidden">
         <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
@@ -675,6 +680,13 @@ const HTML = `<!DOCTYPE html>
     var dealCount      = document.getElementById('deal-count');
     var dealsList      = document.getElementById('deals-list');
     var dealsEmpty     = document.getElementById('deals-empty');
+    var dealsPagination = document.getElementById('deals-pagination');
+    var prevPage       = document.getElementById('prev-page');
+    var nextPage       = document.getElementById('next-page');
+    var pageInfo       = document.getElementById('page-info');
+    var PAGE_LIMIT     = 20;
+    var currentPage    = 1;
+    var cachedDeals    = [];
 
     tabBtns.forEach(function(btn) {
       btn.addEventListener('click', function() {
@@ -737,46 +749,79 @@ const HTML = `<!DOCTYPE html>
     }
 
     // ── Render deals ──────────────────────────────────────────────────────
-    function renderDeals(deals) {
+    function buildDealHtml(d) {
+      var dot   = SOURCE_COLORS[d.source] || '#a1a1aa';
+      var badge = d.wasNotified
+        ? '<span class="filter-badge ok">Notified</span>'
+        : '<span class="filter-badge skip">Skipped' + (d.filterReason ? ': ' + escapeHtml(d.filterReason) : '') + '</span>';
+      var title = d.title || 'Untitled';
+      var link  = d.link || '';
+      var titleHtml = link
+        ? '<a class="deal-title" href="' + escapeAttr(link) + '" target="_blank" rel="noopener">' + escapeHtml(title) + '</a>'
+        : '<span class="deal-title">' + escapeHtml(title) + '</span>';
+      var meta = [];
+      if (d.price) meta.push(d.price);
+      if (d.store) meta.push(d.store);
+      if (d.votes != null) meta.push('+' + d.votes + ' votes');
+      return '<div class="deal-card">' +
+        titleHtml +
+        '<div class="deal-meta">' +
+          '<span class="source-dot" style="background:' + dot + '"></span>' +
+          '<span>' + sourceName(d.source) + '</span>' +
+          (d.category ? '<span>' + escapeHtml(d.category) + '</span>' : '') +
+          (meta.length ? '<span>' + meta.join(' \xb7 ') + '</span>' : '') +
+          badge +
+          '<span>' + timeAgo(d.fetchedAt) + '</span>' +
+        '</div>' +
+      '</div>';
+    }
+
+    function renderPage() {
+      var deals = cachedDeals;
       if (!deals || deals.length === 0) {
         dealsList.innerHTML = '';
         dealsEmpty.classList.remove('hidden');
-        dealCount.textContent = '(0)';
+        dealsPagination.style.display = 'none';
         return;
       }
       dealsEmpty.classList.add('hidden');
-      dealCount.textContent = '(' + deals.length + ')';
-
-      var html = '';
-      deals.forEach(function(d) {
-        var dot   = SOURCE_COLORS[d.source] || '#a1a1aa';
-        var badge = d.wasNotified
-          ? '<span class="filter-badge ok">Notified</span>'
-          : '<span class="filter-badge skip">Skipped' + (d.filterReason ? ': ' + escapeHtml(d.filterReason) : '') + '</span>';
-        var title = d.title || 'Untitled';
-        var link  = d.link || '';
-        var titleHtml = link
-          ? '<a class="deal-title" href="' + escapeAttr(link) + '" target="_blank" rel="noopener">' + escapeHtml(title) + '</a>'
-          : '<span class="deal-title">' + escapeHtml(title) + '</span>';
-        var meta = [];
-        if (d.price) meta.push(d.price);
-        if (d.store) meta.push(d.store);
-        if (d.votes != null) meta.push('+' + d.votes + ' votes');
-
-        html += '<div class="deal-card">' +
-          titleHtml +
-          '<div class="deal-meta">' +
-            '<span class="source-dot" style="background:' + dot + '"></span>' +
-            '<span>' + sourceName(d.source) + '</span>' +
-            (d.category ? '<span>' + escapeHtml(d.category) + '</span>' : '') +
-            (meta.length ? '<span>' + meta.join(' · ') + '</span>' : '') +
-            badge +
-            '<span>' + timeAgo(d.fetchedAt) + '</span>' +
-          '</div>' +
-        '</div>';
-      });
-      dealsList.innerHTML = html;
+      var totalPages = Math.ceil(deals.length / PAGE_LIMIT);
+      var start = (currentPage - 1) * PAGE_LIMIT;
+      dealsList.innerHTML = deals.slice(start, start + PAGE_LIMIT).map(buildDealHtml).join('');
+      if (totalPages > 1) {
+        dealsPagination.style.display = 'flex';
+        pageInfo.textContent = 'Page ' + currentPage + ' of ' + totalPages + ' \xb7 ' + deals.length + ' in 24h';
+        prevPage.disabled = currentPage <= 1;
+        nextPage.disabled = currentPage >= totalPages;
+      } else {
+        dealsPagination.style.display = 'none';
+      }
     }
+
+    function renderDeals(deals) {
+      cachedDeals = deals || [];
+      currentPage = 1;
+      dealCount.textContent = '(' + cachedDeals.length + ')';
+      renderPage();
+    }
+
+    // ── Background deal-count polling (keeps tab badge live on Settings tab) ─
+    function updateDealCount() {
+      fetch('/api/deals/count')
+        .then(function(r) { return r.json(); })
+        .then(function(data) { dealCount.textContent = '(' + (data.count || 0) + ')'; })
+        .catch(function() {});
+    }
+    updateDealCount();
+    setInterval(updateDealCount, 60000);
+
+    // ── Pagination buttons ────────────────────────────────────────────────
+    prevPage.addEventListener('click', function() {
+      if (currentPage > 1) { currentPage--; renderPage(); }
+    });
+    nextPage.addEventListener('click', function() {
+      if (currentPage < Math.ceil(cachedDeals.length / PAGE_LIMIT)) { currentPage++; renderPage(); }
+    });
 
     // ── Load deals from API ───────────────────────────────────────────────
     function loadDeals() {
@@ -838,6 +883,12 @@ export function startWebServer({ port, getConfig, getMeta, getLastPollTime, getH
       if (method === 'GET' && url === '/api/history') {
         const history = await getHistory();
         jsonResponse(res, 200, history);
+        return;
+      }
+
+      if (method === 'GET' && url === '/api/deals/count') {
+        const deals = await getDealLog();
+        jsonResponse(res, 200, { count: deals.length, notified: deals.filter(d => d.wasNotified).length });
         return;
       }
 

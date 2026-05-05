@@ -1,0 +1,49 @@
+name: Create tag and GitHub Release
+
+# Fires when a PR carrying the "release" label is merged into main.
+# The version is read directly from package.json on the merge commit.
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create tags and releases
+      packages: write   # let publish.yml pick up the tag
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version from package.json
+        id: ver
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION"  >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION"     >> "$GITHUB_OUTPUT"
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push tag
+        run: |
+          git tag ${{ steps.ver.outputs.tag }} -m "Release ${{ steps.ver.outputs.tag }}"
+          git push origin ${{ steps.ver.outputs.tag }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ steps.ver.outputs.tag }} \
+            --title "dealmaster ${{ steps.ver.outputs.tag }}" \
+            --generate-notes \
+            --verify-tag
