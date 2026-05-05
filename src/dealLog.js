@@ -60,6 +60,12 @@ export async function logDeals(dataDir, allDeals, filteredDeals, seenIds, hashes
   const filteredSet = new Set(filteredDeals.map(d => d.id));
   const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+  // Load existing log first so we can preserve the original fetchedAt for known deals
+  const existing = await loadDealLog(dataDir);
+  const cutoff = now - MAX_AGE_MS;
+  const recent = existing.filter(d => new Date(d.fetchedAt).getTime() > cutoff);
+  const existingMap = new Map(recent.map(e => [e.id, e]));
+
   const entries = allDeals.map(deal => {
     let filterReason = null;
 
@@ -89,6 +95,10 @@ export async function logDeals(dataDir, allDeals, filteredDeals, seenIds, hashes
       filterReason = 'notification failed';
     }
 
+    // Preserve the original fetchedAt so the UI always shows when dealmaster
+    // first discovered the deal, not the most recent poll cycle timestamp.
+    const fetchedAt = existingMap.get(deal.id)?.fetchedAt ?? new Date().toISOString();
+
     return {
       id:          deal.id,
       title:       deal.title ?? 'Unknown Deal',
@@ -99,16 +109,11 @@ export async function logDeals(dataDir, allDeals, filteredDeals, seenIds, hashes
       source:      deal.source,
       votes:       deal.votes ?? 0,
       type:        deal.type ?? null,
-      fetchedAt:   new Date().toISOString(),
+      fetchedAt,
       wasNotified,
       filterReason,
     };
   });
-
-  // Merge with existing log, keeping only entries from the last 24h
-  const existing = await loadDealLog(dataDir);
-  const cutoff = now - MAX_AGE_MS;
-  const recent = existing.filter(d => new Date(d.fetchedAt).getTime() > cutoff);
 
   // Prepend new entries (newest first)
   const merged = [...entries, ...recent];

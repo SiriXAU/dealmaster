@@ -1,0 +1,82 @@
+name: Bump version and open release PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump type'
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      notes:
+        description: 'Optional release notes (appended to PR body)'
+        required: false
+        default: ''
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version in package.json
+        id: bump
+        run: |
+          OLD=$(node -p "require('./package.json').version")
+          npm version ${{ inputs.bump }} --no-git-tag-version
+          NEW=$(node -p "require('./package.json').version")
+          echo "old=$OLD" >> "$GITHUB_OUTPUT"
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"
+          echo "branch=release/v$NEW" >> "$GITHUB_OUTPUT"
+
+      - name: Create release branch and push
+        run: |
+          git checkout -b ${{ steps.bump.outputs.branch }}
+          git add package.json
+          git commit -m "chore: bump version to v${{ steps.bump.outputs.new }}"
+          git push origin ${{ steps.bump.outputs.branch }}
+
+      - name: Open pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOTES="${{ inputs.notes }}"
+          BODY="## Release v${{ steps.bump.outputs.new }}
+
+          Bumps version from \`v${{ steps.bump.outputs.old }}\` → \`v${{ steps.bump.outputs.new }}\` (${{ inputs.bump }} bump).
+
+          **Merging this PR will automatically:**
+          1. Create git tag \`v${{ steps.bump.outputs.new }}\`
+          2. Publish a GitHub Release with generated changelog
+          3. Build and push Docker image \`ghcr.io/\${{ github.repository }}:${{ steps.bump.outputs.new }}\`
+
+          ${NOTES:+### Notes
+          $NOTES}"
+
+          gh pr create \
+            --title "Release v${{ steps.bump.outputs.new }}" \
+            --body "$BODY" \
+            --base main \
+            --head ${{ steps.bump.outputs.branch }} \
+            --label release
