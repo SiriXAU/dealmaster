@@ -57,6 +57,15 @@ jobs:
           git commit -m "chore: bump version to v${{ steps.bump.outputs.new }}"
           git push origin ${{ steps.bump.outputs.branch }}
 
+      - name: Ensure release label exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create release \
+            --color "0E8A16" \
+            --description "Automated release PR" \
+            --force
+
       - name: Open pull request
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

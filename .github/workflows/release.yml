@@ -1,16 +1,20 @@
 name: Create tag and GitHub Release
 
-# Fires when a PR carrying the "release" label is merged into main.
-# The version is read directly from package.json on the merge commit.
+# Triggers only when package.json is updated on main — which only happens
+# when a release bump PR (from bump-version.yml) is merged.
+# Covers all three GitHub merge strategies:
+#   - squash/rebase: head_commit message = "chore: bump version to vX.Y.Z"
+#   - merge commit:  head_commit message = "Merge pull request #N from .../release/vX.Y.Z"
 on:
-  pull_request:
-    types: [closed]
-    branches:
-      - main
+  push:
+    branches: [main]
+    paths: ['package.json']
 
 jobs:
   release:
-    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')
+    if: |
+      startsWith(github.event.head_commit.message, 'chore: bump version to v') ||
+      contains(github.event.head_commit.message, '/release/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write   # create tags and releases

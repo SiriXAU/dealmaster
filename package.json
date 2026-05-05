@@ -1,6 +1,6 @@
 {
   "name": "dealmaster",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Deal monitor with Apprise notifications",
   "type": "module",
   "main": "index.js",
