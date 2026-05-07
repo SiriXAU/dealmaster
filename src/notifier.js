@@ -31,6 +31,12 @@ const SOURCE_BRANDS = {
   },
 };
 
+const DIGEST_BRAND = {
+  color:      0x18181B,
+  iconUrl:    'https://www.ozbargain.com.au/themes/ozbargain/logo-icon-256.png',
+  footerText: 'Dealmaster · Digest',
+};
+
 function getBrand(source) {
   return SOURCE_BRANDS[source] ?? SOURCE_BRANDS.ozbargain;
 }
@@ -38,19 +44,40 @@ function getBrand(source) {
 const _lastDiscordSend = new Map();
 
 /**
- * Sends a notification for a single deal to all configured URLs.
+ * Sends a notification for a single deal to the given Apprise URLs.
  * Discord URLs (discord://id/token) receive a rich embed via the webhook API.
  * All other URLs are sent via the Apprise CLI.
  *
- * @param {Object} deal   - Normalized deal object
- * @param {Object} config - App config (appriseUrls)
- * @returns {Promise<{ ok: boolean, results: Array<{ url: string, ok: boolean }> }>}
+ * Backward-compatible: a config-shaped second arg (with `appriseUrls`) is also accepted.
  */
-export async function sendDealNotification(deal, config) {
+export async function sendDealNotification(deal, urlsOrConfig) {
+  const urls = Array.isArray(urlsOrConfig)
+    ? urlsOrConfig
+    : (urlsOrConfig?.appriseUrls ?? []);
+  return dispatch(urls, async (webhookUrl) => sendDiscordEmbed(deal, webhookUrl), async (apprise) => sendAppriseDeal(deal, apprise));
+}
+
+/**
+ * Sends a single digest notification summarising up to N deals.
+ * Discord targets get one embed with up to 10 fields (one per deal); other
+ * targets get a markdown bullet list via Apprise.
+ */
+export async function sendDigest(deals, urls, profileName) {
+  if (!Array.isArray(deals) || deals.length === 0 || !Array.isArray(urls) || urls.length === 0) {
+    return { ok: true, results: [] };
+  }
+  return dispatch(
+    urls,
+    async (webhookUrl) => sendDiscordDigest(deals, webhookUrl, profileName),
+    async (apprise)    => sendAppriseDigest(deals, apprise, profileName),
+  );
+}
+
+async function dispatch(urls, sendDiscord, sendApprise) {
   const discordUrls = [];
   const appriseUrls = [];
 
-  for (const url of config.appriseUrls) {
+  for (const url of urls) {
     const webhookUrl = parseDiscordUrl(url);
     if (webhookUrl) {
       discordUrls.push(webhookUrl);
@@ -62,50 +89,34 @@ export async function sendDealNotification(deal, config) {
   const discordResults = await Promise.all(
     discordUrls.map(async webhookUrl => ({
       url: webhookUrl,
-      ok: await sendDiscordEmbed(deal, webhookUrl),
+      ok:  await sendDiscord(webhookUrl),
     }))
   );
 
-  const appriseOk = appriseUrls.length > 0
-    ? await sendApprise(deal, appriseUrls)
-    : true;
+  const appriseOk = appriseUrls.length > 0 ? await sendApprise(appriseUrls) : true;
 
   const allResults = [
     ...discordResults,
     ...appriseUrls.map(u => ({ url: u, ok: appriseOk })),
   ];
 
-  const ok = allResults.every(r => r.ok);
-  return { ok, results: allResults };
+  return { ok: allResults.every(r => r.ok), results: allResults };
 }
 
 /**
  * Converts a discord:// Apprise URL to a Discord webhook HTTPS URL.
- * discord://webhook_id/webhook_token → https://discord.com/api/webhooks/id/token
- * Returns null if the URL is not a discord:// URL.
  */
 export function parseDiscordUrl(url) {
-  const match = url.match(/^discord:\/\/([^/]+)\/(.+)$/i);
+  const match = String(url ?? '').match(/^discord:\/\/([^/]+)\/(.+)$/i);
   if (!match) return null;
   return `https://discord.com/api/webhooks/${match[1]}/${match[2]}`;
 }
 
-/**
- * Posts a rich Discord embed for the given deal.
- * Enforces per-webhook rate limiting and handles 429 responses.
- */
-async function sendDiscordEmbed(deal, webhookUrl) {
+async function postDiscord(webhookUrl, payload) {
   const MIN_INTERVAL_MS = 1000;
   const last = _lastDiscordSend.get(webhookUrl) ?? 0;
   const wait = MIN_INTERVAL_MS - (Date.now() - last);
   if (wait > 0) await sleep(wait);
-
-  const embed = buildEmbed(deal);
-  const payload = {
-    username: 'Dealmaster',
-    avatar_url: getBrand(deal.source).iconUrl,
-    embeds: [embed],
-  };
 
   const MAX_ATTEMPTS = 2;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -116,9 +127,7 @@ async function sendDiscordEmbed(deal, webhookUrl) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-
       if (res.ok) return true;
-
       if (res.status === 429) {
         const retryAfter = res.headers.get('Retry-After');
         const delay = retryAfter ? parseFloat(retryAfter) * 1000 : 2000;
@@ -126,7 +135,6 @@ async function sendDiscordEmbed(deal, webhookUrl) {
         await sleep(delay);
         continue;
       }
-
       const body = await res.text().catch(() => '');
       log.error(`Discord returned ${res.status}: ${body}`);
       return false;
@@ -136,12 +144,29 @@ async function sendDiscordEmbed(deal, webhookUrl) {
         await sleep(1000);
         continue;
       }
-      log.error(`Failed to send Discord embed: ${err.message}`);
+      log.error(`Failed to post to Discord: ${err.message}`);
       return false;
     }
   }
-
   return false;
+}
+
+async function sendDiscordEmbed(deal, webhookUrl) {
+  const embed = buildEmbed(deal);
+  return postDiscord(webhookUrl, {
+    username: 'Dealmaster',
+    avatar_url: getBrand(deal.source).iconUrl,
+    embeds: [embed],
+  });
+}
+
+async function sendDiscordDigest(deals, webhookUrl, profileName) {
+  const embed = buildDigestEmbed(deals, profileName);
+  return postDiscord(webhookUrl, {
+    username: 'Dealmaster',
+    avatar_url: DIGEST_BRAND.iconUrl,
+    embeds: [embed],
+  });
 }
 
 /**
@@ -154,14 +179,10 @@ export function buildEmbed(deal) {
   const title = truncate(deal.title, 256);
   const description = truncate(deal.description, 300) || 'No description available.';
 
-  // Always emit exactly 3 inline fields per row so Discord's grid stays aligned.
   const inline = (name, value) => ({ name, value, inline: true });
 
   let fields;
   if (deal.source === 'ozbargain') {
-    // Row 1: Price | Store | Delivery
-    // Row 2: Category | Votes | Posted by
-    // Row 3 (optional): Expires — shown alone, full-width
     fields = [
       inline('Price',     deal.price    || '—'),
       inline('Store',     deal.store    || '—'),
@@ -175,9 +196,6 @@ export function buildEmbed(deal) {
       if (expiryLabel) fields.push({ name: 'Expires', value: expiryLabel, inline: false });
     }
   } else {
-    // Gaming sources: no votes/delivery, show deal type and source instead
-    // Row 1: Price | Store | Category
-    // Row 2: Type  | Source | Posted
     const posted = deal.pubDate
       ? new Date(deal.pubDate).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
       : '—';
@@ -210,18 +228,46 @@ export function buildEmbed(deal) {
 }
 
 /**
- * Formats an expiry date/string for display. Returns null if unparseable.
+ * Builds a Discord digest embed: one card listing up to 10 deals as inline
+ * fields with their price + store + link. If more than 10, appends a footer note.
  */
+export function buildDigestEmbed(deals, profileName) {
+  const MAX_FIELDS = 10;
+  const shown = deals.slice(0, MAX_FIELDS);
+  const fields = shown.map(d => {
+    const head = [d.price || '—', d.store || sourceLabel(d.source)].filter(Boolean).join(' · ');
+    const value = d.link
+      ? `[${truncate(d.title, 90)}](${d.link})\n${head}`
+      : `${truncate(d.title, 90)}\n${head}`;
+    return { name: '​', value: truncate(value, 1024), inline: false };
+  });
+
+  const overflow = deals.length - shown.length;
+  const description = overflow > 0
+    ? `${deals.length} new deals · showing first ${shown.length} (+${overflow} more)`
+    : `${deals.length} new deal${deals.length === 1 ? '' : 's'}`;
+
+  return {
+    title: `Digest — ${profileName ?? 'Default'}`,
+    description,
+    color: DIGEST_BRAND.color,
+    fields,
+    footer: { text: DIGEST_BRAND.footerText, icon_url: DIGEST_BRAND.iconUrl },
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function sourceLabel(source) {
+  return SOURCE_BRANDS[source]?.footerText ?? source ?? 'Unknown';
+}
+
 function formatExpiry(expiry) {
   const d = new Date(expiry);
   if (isNaN(d.getTime())) return String(expiry);
   return d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-/**
- * Sends a notification to all non-Discord URLs via the Apprise CLI.
- */
-function sendApprise(deal, urls) {
+function sendAppriseDeal(deal, urls) {
   const title = truncate(deal.title, 250);
   const parts = [truncate(deal.description, 300) || 'No description available.'];
 
@@ -244,8 +290,24 @@ function sendApprise(deal, urls) {
   parts.push(meta.join(' | '));
   if (deal.link) parts.push(deal.link);
 
-  const body = parts.join('\n');
+  return runApprise(title, parts.join('\n'), urls);
+}
 
+function sendAppriseDigest(deals, urls, profileName) {
+  const title = `Dealmaster digest — ${deals.length} deal${deals.length === 1 ? '' : 's'}`;
+  const lines = [`Profile: ${profileName ?? 'Default'}`, ''];
+  for (const d of deals) {
+    const head = [d.price || '—', d.store || sourceLabel(d.source)].filter(Boolean).join(' · ');
+    if (d.link) {
+      lines.push(`• ${d.title} — ${head}\n  ${d.link}`);
+    } else {
+      lines.push(`• ${d.title} — ${head}`);
+    }
+  }
+  return runApprise(title, lines.join('\n'), urls);
+}
+
+function runApprise(title, body, urls) {
   return new Promise(resolve => {
     execFile(
       'apprise',
@@ -262,18 +324,12 @@ function sendApprise(deal, urls) {
   });
 }
 
-/**
- * Truncates a string to maxLen characters, appending '…' if truncated.
- */
 function truncate(str, maxLen) {
   if (!str) return '';
   if (str.length <= maxLen) return str;
   return str.slice(0, maxLen - 1) + '…';
 }
 
-/**
- * Waits for the given number of milliseconds.
- */
 export function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }

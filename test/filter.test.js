@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { filterDeals, matchesCategories, meetsMinVotes, matchesKeywords } from '../src/filter.js';
+import { filterDeals, filterForProfile, matchesCategories, meetsMinVotes, matchesKeywords } from '../src/filter.js';
 
 function deal(overrides = {}) {
   return {
@@ -104,5 +104,29 @@ describe('filterDeals', () => {
 
   it('returns empty array for empty input', () => {
     assert.strictEqual(filterDeals([], {}).length, 0);
+  });
+});
+
+describe('filterForProfile', () => {
+  it('reads filters off the profile object', () => {
+    const deals = [
+      deal({ id: '1', category: 'Computing', votes: 10, title: 'Free SSD' }),
+      deal({ id: '2', category: 'Gaming', votes: 3 }),
+    ];
+    const profile = { id: 'p', categories: ['Computing'], minVotes: 5, keywords: [] };
+    const result = filterForProfile(deals, profile);
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].id, '1');
+  });
+
+  it('two profiles with disjoint categories filter independently', () => {
+    const deals = [
+      deal({ id: '1', category: 'Computing' }),
+      deal({ id: '2', category: 'Gaming' }),
+    ];
+    const a = filterForProfile(deals, { id: 'a', categories: ['Computing'], minVotes: 0, keywords: [] });
+    const b = filterForProfile(deals, { id: 'b', categories: ['Gaming'],    minVotes: 0, keywords: [] });
+    assert.deepStrictEqual(a.map(d => d.id), ['1']);
+    assert.deepStrictEqual(b.map(d => d.id), ['2']);
   });
 });

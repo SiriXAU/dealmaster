@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { contentHash, loadSeenDeals, saveSeenDeals } from '../src/store.js';
+import { contentHash, fuzzyHash, loadSeenDeals, saveSeenDeals } from '../src/store.js';
 
 describe('contentHash', () => {
   it('returns a 16-char hex string', () => {
@@ -60,12 +60,14 @@ describe('loadSeenDeals / saveSeenDeals', () => {
     try {
       const ids = new Set(['deal-1', 'deal-2']);
       const hashes = new Map([['abc123', Date.now()]]);
-      await saveSeenDeals(ids, hashes, tmpDir, 500);
+      const fuzzies = new Map([['fzz123', Date.now()]]);
+      await saveSeenDeals(ids, hashes, fuzzies, tmpDir, 500);
 
       const loaded = await loadSeenDeals(tmpDir);
       assert.ok(loaded.ids.has('deal-1'));
       assert.ok(loaded.ids.has('deal-2'));
       assert.strictEqual(loaded.hashes.get('abc123'), hashes.get('abc123'));
+      assert.ok(loaded.fuzzies instanceof Map);
     } finally {
       await cleanup();
     }
@@ -76,16 +78,15 @@ describe('loadSeenDeals / saveSeenDeals', () => {
     try {
       const ids = new Set();
       const hashes = new Map();
+      const fuzzies = new Map();
       for (let i = 0; i < 100; i++) {
         ids.add(`deal-${i}`);
         hashes.set(`hash-${i}`, Date.now() - (100 - i) * 1000);
       }
-      await saveSeenDeals(ids, hashes, tmpDir, 50);
+      await saveSeenDeals(ids, hashes, fuzzies, tmpDir, 50);
 
       const loaded = await loadSeenDeals(tmpDir);
-      // IDs are kept from the tail
       assert.strictEqual(loaded.ids.size, 50);
-      // Hashes are sorted by time, kept most recent
       assert.ok(loaded.hashes.size <= 50);
     } finally {
       await cleanup();
@@ -96,11 +97,47 @@ describe('loadSeenDeals / saveSeenDeals', () => {
     await setup();
     try {
       await fs.writeFile(path.join(tmpDir, 'seen-deals.json'), 'not-json');
-      const { ids, hashes } = await loadSeenDeals(tmpDir);
+      const { ids, hashes, fuzzies } = await loadSeenDeals(tmpDir);
       assert.strictEqual(ids.size, 0);
       assert.strictEqual(hashes.size, 0);
+      assert.strictEqual(fuzzies.size, 0);
     } finally {
       await cleanup();
     }
+  });
+
+  it('reads legacy {h,t} entries without a fuzzy field', async () => {
+    await setup();
+    try {
+      const file = path.join(tmpDir, 'seen-deals.json');
+      const t = Date.now();
+      await fs.writeFile(file, JSON.stringify({ ids: ['x'], entries: [{ h: 'legacy01', t }] }));
+      const loaded = await loadSeenDeals(tmpDir);
+      assert.ok(loaded.ids.has('x'));
+      assert.strictEqual(loaded.hashes.get('legacy01'), t);
+      assert.strictEqual(loaded.fuzzies.size, 0);
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+describe('fuzzyHash', () => {
+  it('collides for cross-source variants of the same deal', () => {
+    const a = fuzzyHash({ title: '50% off Logitech MX Master', price: '$99' });
+    const b = fuzzyHash({ title: '50 OFF logitech mx master ', price: '$99' });
+    assert.strictEqual(a, b);
+  });
+
+  it('differs when titles differ meaningfully', () => {
+    const a = fuzzyHash({ title: 'Logitech MX Master', price: '$99' });
+    const b = fuzzyHash({ title: 'Logitech MX Anywhere', price: '$99' });
+    assert.notStrictEqual(a, b);
+  });
+
+  it('differs when price differs', () => {
+    const a = fuzzyHash({ title: 'SSD 1TB', price: '$99' });
+    const b = fuzzyHash({ title: 'SSD 1TB', price: '$199' });
+    assert.notStrictEqual(a, b);
   });
 });

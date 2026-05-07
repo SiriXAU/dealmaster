@@ -1,9 +1,27 @@
-export function filterDeals(deals, { categories, minVotes, keywords }) {
+/**
+ * Returns deals that match the given criteria.
+ * Backward-compatible: callers that pass `{ categories, keywords, minVotes }`
+ * (the legacy global-filter shape) still work; new callers can pass a profile.
+ */
+export function filterDeals(deals, criteria) {
+  const { categories, minVotes, keywords } = criteria ?? {};
   return deals.filter(deal =>
     matchesCategories(deal, categories) &&
     meetsMinVotes(deal, minVotes) &&
     matchesKeywords(deal, keywords)
   );
+}
+
+/**
+ * Returns deals that match a profile's filters.
+ * Same predicate set as filterDeals but reads off a profile object.
+ */
+export function filterForProfile(deals, profile) {
+  return filterDeals(deals, {
+    categories: profile?.categories,
+    minVotes:   profile?.minVotes,
+    keywords:   profile?.keywords,
+  });
 }
 
 /**

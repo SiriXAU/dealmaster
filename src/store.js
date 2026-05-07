@@ -12,11 +12,29 @@ export function contentHash(deal) {
 }
 
 /**
- * Loads the set of previously seen deal IDs and a Map of content hash → seen timestamp.
- * Backward-compatible with the old flat-array seen-deals.json format.
+ * Generates a fuzzy hash for cross-source deduplication.
+ * Strips punctuation, collapses whitespace, lowercases, and uses only the
+ * first 64 chars of the title plus the price. The same deal cross-posted
+ * from OzBargain and GamerPower will collide here even when GUID/link differ.
+ */
+export function fuzzyHash(deal) {
+  const norm = (deal.title ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 64);
+  const price = (deal.price ?? '').toLowerCase().replace(/[^a-z0-9.]/g, '');
+  const key = `${norm}|${price}`;
+  return crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
+}
+
+/**
+ * Loads previously seen deal IDs, content hashes, and fuzzy hashes.
+ * Tolerates the legacy flat-array shape and the {ids, entries:[{h,t}]} shape.
  *
  * @param {string} dataDir
- * @returns {Promise<{ ids: Set<string>, hashes: Map<string, number> }>}
+ * @returns {Promise<{ ids: Set<string>, hashes: Map<string, number>, fuzzies: Map<string, number> }>}
  */
 export async function loadSeenDeals(dataDir) {
   const filePath = path.join(dataDir, 'seen-deals.json');
@@ -24,43 +42,54 @@ export async function loadSeenDeals(dataDir) {
     const raw = await fs.readFile(filePath, 'utf-8');
     const data = JSON.parse(raw);
     if (Array.isArray(data)) {
-      // Old format: plain array of ID strings — no content hashes
-      return { ids: new Set(data), hashes: new Map() };
+      return { ids: new Set(data), hashes: new Map(), fuzzies: new Map() };
     }
     if (data && Array.isArray(data.ids)) {
       const ids = new Set(data.ids);
       const hashes = new Map();
+      const fuzzies = new Map();
       if (Array.isArray(data.entries)) {
         for (const e of data.entries) {
           if (e.h && e.t) hashes.set(e.h, e.t);
+          if (e.f && e.t) fuzzies.set(e.f, e.t);
         }
       }
-      return { ids, hashes };
+      return { ids, hashes, fuzzies };
     }
   } catch {
     // File missing or corrupt — start fresh
   }
-  return { ids: new Set(), hashes: new Map() };
+  return { ids: new Set(), hashes: new Map(), fuzzies: new Map() };
 }
 
 /**
- * Persists seen deal IDs and content hashes to disk.
- * Trims the oldest entries if total exceeds maxSize.
- *
- * @param {Set<string>} ids
- * @param {Map<string, number>} hashes - content hash → seen timestamp
- * @param {string} dataDir
- * @param {number} maxSize
+ * Persists seen deal IDs, content hashes, and fuzzy hashes.
+ * Trims the oldest hash entries when the total exceeds maxSize.
  */
-export async function saveSeenDeals(ids, hashes, dataDir, maxSize) {
+export async function saveSeenDeals(ids, hashes, fuzzies, dataDir, maxSize) {
   await fs.mkdir(dataDir, { recursive: true });
   const filePath = path.join(dataDir, 'seen-deals.json');
 
-  const entries = [];
+  // Build entries keyed by content hash; merge fuzzy hashes by timestamp match.
+  const byHash = new Map();
   for (const [h, t] of hashes) {
-    entries.push({ h, t });
+    byHash.set(h, { h, t, f: null });
   }
-  // Keep most recent entries
+  // Pair each fuzzy hash with the entry that shares its timestamp (best-effort);
+  // otherwise emit it as its own row keyed only on f.
+  for (const [f, t] of fuzzies) {
+    let paired = false;
+    for (const entry of byHash.values()) {
+      if (entry.t === t && entry.f === null) {
+        entry.f = f;
+        paired = true;
+        break;
+      }
+    }
+    if (!paired) byHash.set(`f:${f}`, { h: null, t, f });
+  }
+
+  let entries = Array.from(byHash.values());
   if (entries.length > maxSize) {
     entries.sort((a, b) => b.t - a.t);
     entries.length = maxSize;

@@ -1,7 +1,7 @@
 import { createLogger } from './src/logger.js';
 import { loadConfig } from './src/config.js';
 import { loadSettings, saveSettings } from './src/settings.js';
-import { startMonitor, startPollLoop, stopPollLoop, getLastPollTime } from './src/monitor.js';
+import { startMonitor, startPollLoop, stopPollLoop, getLastPollTime, persistPendingDigest } from './src/monitor.js';
 import { startWebServer } from './src/web.js';
 import { loadHistory } from './src/history.js';
 import { loadDealLog } from './src/dealLog.js';
@@ -21,8 +21,7 @@ const _gsActive = [
 ].filter(Boolean);
 
 log.info('=== dealmaster: Deal Notification Tool ===');
-log.info(`Categories : ${activeConfig.categories.length ? activeConfig.categories.join(', ') : 'ALL'}`);
-log.info(`Min votes  : ${activeConfig.minVotes}`);
+log.info(`Profiles   : ${activeConfig.profiles.map(p => `${p.id}(${p.appriseUrls.length}url)`).join(', ')}`);
 log.info(`Poll every : ${activeConfig.pollIntervalMs / 1000}s`);
 log.info(`Gaming srcs: ${_gsActive.length ? _gsActive.join(', ') : 'disabled'}`);
 log.info(`Data dir   : ${activeConfig.dataDir}`);
@@ -31,17 +30,19 @@ const webPort = parseInt(process.env.WEB_PORT ?? '8080', 10);
 log.info(`Web UI     : http://localhost:${webPort}`);
 log.info('=============================================');
 
-process.on('SIGTERM', () => {
-  log.info('Received SIGTERM, shutting down.');
+async function gracefulShutdown(signal) {
+  log.info(`Received ${signal}, shutting down.`);
   stopPollLoop();
+  try {
+    await persistPendingDigest();
+  } catch (err) {
+    log.error(`Error persisting pending digest: ${err.message}`);
+  }
   process.exit(0);
-});
+}
 
-process.on('SIGINT', () => {
-  log.info('Received SIGINT, shutting down.');
-  stopPollLoop();
-  process.exit(0);
-});
+process.on('SIGTERM', () => { gracefulShutdown('SIGTERM'); });
+process.on('SIGINT',  () => { gracefulShutdown('SIGINT'); });
 
 let currentSavedAt = savedSettings?.savedAt ?? null;
 
