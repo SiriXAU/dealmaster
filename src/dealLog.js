@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { createLogger } from './logger.js';
 import { matchesCategories, meetsMinVotes, matchesKeywords } from './filter.js';
-import { contentHash } from './store.js';
+import { contentHash, fuzzyHash } from './store.js';
 
 const log = createLogger('deallog');
 
@@ -10,8 +10,6 @@ const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Loads the deal log from disk.
- * @param {string} dataDir
- * @returns {Promise<Array>}
  */
 export async function loadDealLog(dataDir) {
   const filePath = path.join(dataDir, 'deal-log.json');
@@ -25,11 +23,6 @@ export async function loadDealLog(dataDir) {
   return [];
 }
 
-/**
- * Persists the deal log to disk, pruning entries older than 24 hours.
- * @param {string} dataDir
- * @param {Array} deals
- */
 async function saveDealLog(dataDir, deals) {
   const cutoff = Date.now() - MAX_AGE_MS;
   const pruned = deals.filter(d => new Date(d.fetchedAt).getTime() > cutoff);
@@ -44,61 +37,74 @@ async function saveDealLog(dataDir, deals) {
 }
 
 /**
- * Logs all deals from a poll cycle, annotating each with its filter/notify status.
- * Called once per poll cycle by monitor.js.
+ * Logs all deals from a poll cycle, annotating each with filter/notify/queue status
+ * and recording which profiles matched.
  *
  * @param {string} dataDir
  * @param {Array} allDeals       - All fetched deals
- * @param {Array} filteredDeals  - Deals that passed category/keyword/vote filters
- * @param {Set<string>} seenIds  - Previously seen deal IDs
+ * @param {Array} filteredDeals  - Deals that passed at least one profile's filters
+ * @param {Set<string>} seenIds  - Previously seen deal IDs (before this cycle)
  * @param {Map<string, number>} hashes - Content hash → seen timestamp
- * @param {Set<string>} notifiedIds - Deals where notification actually succeeded
- * @param {Object} config        - App config (categories, keywords, minVotes, gamingSources)
+ * @param {Map<string, number>} fuzzies - Fuzzy hash → seen timestamp
+ * @param {Set<string>} notifiedIds - Deals where realtime notification fired
+ * @param {Map<string, string[]>} profileMatches - dealId → list of profile ids that matched
+ * @param {Set<string>} queuedIds - Deals enqueued for digest delivery
+ * @param {Object} config        - App config (profiles[], gamingSources)
  */
-export async function logDeals(dataDir, allDeals, filteredDeals, seenIds, hashes, notifiedIds, config) {
+export async function logDeals(dataDir, allDeals, filteredDeals, seenIds, hashes, fuzzies, notifiedIds, profileMatches, queuedIds, config) {
   const now = Date.now();
   const filteredSet = new Set(filteredDeals.map(d => d.id));
   const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-  // Load existing log first so we can preserve the original fetchedAt for known deals
   const existing = await loadDealLog(dataDir);
   const cutoff = now - MAX_AGE_MS;
   const recent = existing.filter(d => new Date(d.fetchedAt).getTime() > cutoff);
   const existingMap = new Map(recent.map(e => [e.id, e]));
 
+  // Build a "any profile" view of categories/keywords/minVotes for the
+  // human-readable filterReason. Use the union for category/keyword and the
+  // lowest minVotes across profiles so we don't lie about "category mismatch"
+  // when one profile would have accepted it.
+  const profiles = Array.isArray(config?.profiles) ? config.profiles : [];
+  const allCategories = profiles.flatMap(p => p.categories ?? []);
+  const allKeywords   = profiles.flatMap(p => p.keywords ?? []);
+  const minMinVotes   = profiles.length > 0 ? Math.min(...profiles.map(p => p.minVotes ?? 0)) : 0;
+
   const entries = allDeals.map(deal => {
     let filterReason = null;
+    const matched = profileMatches.get(deal.id) ?? [];
 
     if (!filteredSet.has(deal.id)) {
-      // Determine which filter caught it
-      if (config.categories.length > 0 && !matchesCategories(deal, config.categories)) {
+      if (allCategories.length > 0 && !matchesCategories(deal, allCategories)) {
         filterReason = 'category mismatch';
-      } else if (config.keywords.length > 0 && !matchesKeywords(deal, config.keywords)) {
+      } else if (allKeywords.length > 0 && !matchesKeywords(deal, allKeywords)) {
         filterReason = 'keyword mismatch';
-      } else if (!meetsMinVotes(deal, config.minVotes)) {
-        filterReason = `below min votes: ${deal.votes} < ${config.minVotes}`;
+      } else if (!meetsMinVotes(deal, minMinVotes)) {
+        filterReason = `below min votes: ${deal.votes} < ${minMinVotes}`;
       } else {
         filterReason = 'filtered';
       }
     } else if (seenIds.has(deal.id)) {
       filterReason = 'already seen';
-    } else if (hashes.has(contentHash(deal))) {
-      const seenAt = hashes.get(contentHash(deal));
-      if (seenAt && (now - seenAt) < DEDUP_WINDOW_MS) {
+    } else {
+      const ch = contentHash(deal);
+      const fh = fuzzyHash(deal);
+      const hashSeenAt  = hashes.get(ch);
+      const fuzzySeenAt = fuzzies.get(fh);
+      if (hashSeenAt && (now - hashSeenAt) < DEDUP_WINDOW_MS) {
         filterReason = 'content duplicate';
+      } else if (fuzzySeenAt && (now - fuzzySeenAt) < DEDUP_WINDOW_MS) {
+        filterReason = 'cross-source duplicate';
       }
     }
 
     const wasNotified = notifiedIds.has(deal.id);
-    // If it passed all checks but notification failed, note that
-    if (!filterReason && !wasNotified && !seenIds.has(deal.id)) {
+    const wasQueued   = queuedIds.has(deal.id);
+
+    if (!filterReason && !wasNotified && !wasQueued && !seenIds.has(deal.id)) {
       filterReason = 'notification failed';
     }
 
-    // Timestamp priority:
-    // 1. fetchedAt from the deal log  — exact time dealmaster first saw it (within 24h)
-    // 2. pubDate from the feed        — when the deal was posted (for aged-out "already seen" deals)
-    // 3. now                          — genuinely new deal with no feed date
     const fetchedAt = existingMap.get(deal.id)?.fetchedAt ?? deal.pubDate ?? new Date().toISOString();
 
     return {
@@ -113,14 +119,14 @@ export async function logDeals(dataDir, allDeals, filteredDeals, seenIds, hashes
       type:        deal.type ?? null,
       fetchedAt,
       wasNotified,
+      wasQueued,
+      profiles:    matched,
       filterReason,
     };
   });
 
-  // Prepend new entries (newest first)
   const merged = [...entries, ...recent];
 
-  // Deduplicate by ID — keep the newest entry for each ID
   const seen = new Set();
   const deduped = merged.filter(e => {
     if (seen.has(e.id)) return false;
