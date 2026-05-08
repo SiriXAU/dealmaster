@@ -92,7 +92,7 @@ function rescheduleDigestTimers(config) {
 
     if (mode === 'quiet') {
       target = quietWindowEnd(profile, now);
-    } else if (profile?.schedule?.mode === 'digest') {
+    } else if (mode === 'digest') {
       target = nextDigestAt(profile, now);
     }
 

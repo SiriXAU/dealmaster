@@ -67,9 +67,19 @@ describe('currentMode', () => {
     assert.strictEqual(currentMode(profile, Date.UTC(2026, 4, 1, 8, 0)), 'realtime');
   });
 
-  it('explicit quiet mode wins regardless of windows', () => {
+  it('explicit quiet mode without quiet hours acts as realtime', () => {
+    // No quiet zone is configured, so there is no time at which the profile
+    // is actually silenced — deliver immediately rather than queue forever.
     const profile = { schedule: { mode: 'quiet', timezone: 'UTC', quietHours: [] } };
-    assert.strictEqual(currentMode(profile, Date.UTC(2026, 4, 1, 12)), 'quiet');
+    assert.strictEqual(currentMode(profile, Date.UTC(2026, 4, 1, 12)), 'realtime');
+  });
+
+  it('explicit quiet mode is silent inside quiet hours, realtime outside', () => {
+    const profile = {
+      schedule: { mode: 'quiet', timezone: 'UTC', quietHours: [{ from: '22:00', to: '07:00' }] }
+    };
+    assert.strictEqual(currentMode(profile, Date.UTC(2026, 4, 1, 1, 0)),  'quiet');
+    assert.strictEqual(currentMode(profile, Date.UTC(2026, 4, 1, 12, 0)), 'realtime');
   });
 
   it('digest mode outside quiet hours is digest', () => {
