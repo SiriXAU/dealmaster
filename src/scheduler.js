@@ -92,19 +92,24 @@ function normaliseSchedule(schedule) {
  * Returns the effective delivery mode for a profile right now.
  * 'realtime' → fire immediately
  * 'digest'   → enqueue, flush at digestAt
- * 'quiet'    → enqueue, flush when window ends or when mode flips back to realtime
+ * 'quiet'    → enqueue, flush when the quiet window ends
+ *
+ * The explicit `quiet` mode means "be silent during the configured quiet
+ * hours". Outside any quiet window it falls back to realtime so deals are
+ * delivered immediately — without this, deals would queue forever because
+ * an always-on quiet mode has no natural release point.
  */
 export function currentMode(profile, now = Date.now()) {
   const sch = normaliseSchedule(profile?.schedule);
   if (!sch) return 'realtime';
 
-  // An explicit `quiet` mode wins regardless of windows.
-  if (sch.mode === 'quiet') return 'quiet';
-
-  // Quiet hours always silence the profile, even when mode is realtime/digest.
+  // Quiet hours silence the profile regardless of mode.
   for (const win of sch.quietHours) {
     if (inWindow(now, win.from, win.to, sch.timezone)) return 'quiet';
   }
+
+  // Outside any quiet window, explicit quiet mode delivers in realtime.
+  if (sch.mode === 'quiet') return 'realtime';
 
   return sch.mode;
 }
