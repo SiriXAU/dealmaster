@@ -171,3 +171,51 @@ export function quietWindowEnd(profile, now = Date.now()) {
   }
   return null;
 }
+
+/**
+ * Returns the timestamp (ms, minute-aligned) of the most recent digestAt
+ * boundary at or before `now`, or null if none in the last 25 hours.
+ */
+export function previousDigestAt(profile, now = Date.now()) {
+  const sch = normaliseSchedule(profile?.schedule);
+  if (!sch) return null;
+  const target = parseHHMM(sch.digestAt);
+  if (!target) return null;
+  const STEP = 60 * 1000;
+  const base = now - (now % STEP);
+  for (let i = 0; i <= 25 * 60; i++) {
+    const cand = base - i * STEP;
+    const wc = wallClock(cand, sch.timezone);
+    if (wc.hour === target.h && wc.minute === target.m) return cand;
+  }
+  return null;
+}
+
+/**
+ * Returns the timestamp (ms, minute-aligned) when the quiet window containing
+ * `now` began, or null if the profile is not in a quiet window right now.
+ */
+export function quietWindowStart(profile, now = Date.now()) {
+  if (currentMode(profile, now) !== 'quiet') return null;
+  const STEP = 60 * 1000;
+  const base = now - (now % STEP);
+  for (let i = 1; i <= 25 * 60; i++) {
+    const cand = base - i * STEP;
+    if (currentMode(profile, cand) !== 'quiet') return cand + STEP;
+  }
+  return base - 25 * 60 * STEP;
+}
+
+/**
+ * True when a digest profile's most recent digestAt fell inside the quiet
+ * window it is currently in — i.e. that digest was held back and should be
+ * sent as soon as the window ends. Derived purely from the schedule, so it
+ * survives restarts without any persisted state.
+ */
+export function isDigestDeferred(profile, now = Date.now()) {
+  if (scheduledMode(profile) !== 'digest') return false;
+  const start = quietWindowStart(profile, now);
+  if (start == null) return false;
+  const prev = previousDigestAt(profile, now);
+  return prev != null && prev >= start;
+}

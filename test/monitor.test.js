@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { runOnce, dedupeBatch, MAX_SEND_ATTEMPTS, __setTestDeps, __resetState } from '../src/monitor.js';
+import { runOnce, dedupeBatch, nextFlushTarget, MAX_SEND_ATTEMPTS, __setTestDeps, __resetState } from '../src/monitor.js';
 import { loadDealLog } from '../src/dealLog.js';
 
 function deal(overrides = {}) {
@@ -74,6 +74,26 @@ describe('runOnce', () => {
     assert.deepStrictEqual(sent, ['gamerpower:7']);
   });
 
+  it('does not let a filtered-out copy suppress a matching cross-source copy', async () => {
+    const cfg = config();
+    cfg.profiles[0].minVotes = 50;
+    feed = [
+      deal({ id: 'ozb-9', title: 'Free Game X', price: 'Free', votes: 1 }),
+      deal({ id: 'gamerpower:9', title: 'Free Game X', price: 'Free', votes: 0, source: 'gamerpower' }),
+    ];
+    assert.strictEqual(await runOnce(cfg), 1);
+    assert.deepStrictEqual(sent, ['gamerpower:9']);
+  });
+
+  it('sends a cross-source deal once when both copies match', async () => {
+    feed = [
+      deal({ id: 'ozb-9', title: 'Free Game X', price: 'Free' }),
+      deal({ id: 'gamerpower:9', title: 'Free Game X', price: 'Free', source: 'gamerpower' }),
+    ];
+    assert.strictEqual(await runOnce(config()), 1);
+    assert.deepStrictEqual(sent, ['ozb-9']);
+  });
+
   it('does not re-notify on the next poll', async () => {
     feed = [deal()];
     await runOnce(config());
@@ -130,5 +150,21 @@ describe('runOnce', () => {
     assert.deepStrictEqual(sent, []);
     const queue = JSON.parse(await fs.readFile(path.join(dataDir, 'pending-digest.json'), 'utf8'));
     assert.strictEqual(queue.a.length, 1);
+  });
+});
+
+describe('nextFlushTarget', () => {
+  const profile = {
+    id: 'd',
+    schedule: { timezone: 'UTC', mode: 'digest', quietHours: [{ from: '22:00', to: '07:00' }], digestAt: '06:00' },
+  };
+
+  it('after a restart mid-quiet-window, flushes a held digest when quiet ends (not tomorrow)', () => {
+    assert.strictEqual(nextFlushTarget(profile, Date.parse('2026-11-15T06:30:00Z')), Date.parse('2026-11-15T07:00:00Z'));
+  });
+
+  it('otherwise targets the next digestAt', () => {
+    assert.strictEqual(nextFlushTarget(profile, Date.parse('2026-11-15T05:00:00Z')), Date.parse('2026-11-15T06:00:00Z'));
+    assert.strictEqual(nextFlushTarget(profile, Date.parse('2026-11-15T12:00:00Z')), Date.parse('2026-11-16T06:00:00Z'));
   });
 });

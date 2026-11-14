@@ -5,7 +5,7 @@ import { loadSeenDeals, saveSeenDeals, contentHash, fuzzyHash } from './store.js
 import { sendDealNotification, sendDigest, sleep } from './notifier.js';
 import { addToHistory } from './history.js';
 import { logDeals } from './dealLog.js';
-import { currentMode, scheduledMode, nextDigestAt, quietWindowEnd } from './scheduler.js';
+import { currentMode, scheduledMode, nextDigestAt, quietWindowEnd, isDigestDeferred } from './scheduler.js';
 import { loadQueue, saveQueue, enqueue, drain, size as queueSize } from './digestQueue.js';
 
 const log = createLogger('monitor');
@@ -30,7 +30,6 @@ let _activeConfig = null;       // last config we polled with
 let _lastMode = new Map();      // profileId → 'realtime'|'digest'|'quiet' (previous cycle)
 let _seededSources = new Set(); // sources whose current feed contents are already marked seen
 let _retries = new Map();       // profileId → Array<{ deal, attempts }>
-let _digestDue = new Set();     // digest profiles whose digestAt fell inside quiet hours
 
 export function getLastPollTime() {
   return lastSuccessfulPoll;
@@ -112,11 +111,11 @@ async function ensureQueue(config) {
  *    the digest is held and sent when the quiet window ends instead.
  *  - realtime/quiet profiles inside quiet hours flush when the window ends.
  */
-function nextFlushTarget(profile, now) {
+export function nextFlushTarget(profile, now) {
   const quiet = currentMode(profile, now) === 'quiet';
   if (scheduledMode(profile) === 'digest') {
     const digestAt = nextDigestAt(profile, now);
-    if (quiet && _digestDue.has(profile.id)) {
+    if (quiet && isDigestDeferred(profile, now)) {
       const quietEnd = quietWindowEnd(profile, now);
       if (quietEnd != null && (digestAt == null || quietEnd < digestAt)) return quietEnd;
     }
@@ -144,11 +143,10 @@ function rescheduleDigestTimers(config) {
         if (!current) return;
         const firedAt = Date.now();
         if (scheduledMode(current) === 'digest' && currentMode(current, firedAt) === 'quiet') {
-          // digestAt landed inside quiet hours — hold until the window ends.
-          _digestDue.add(current.id);
+          // digestAt landed inside quiet hours — hold it; nextFlushTarget
+          // will now point at the end of the quiet window.
           return;
         }
-        _digestDue.delete(current.id);
         await flushProfileDigest(current.id, cfg);
       })
         .catch(err => log.error(`Digest flush failed for "${profile.id}": ${err.message}`))
@@ -179,10 +177,14 @@ async function flushProfileDigest(profileId, config) {
 }
 
 /**
- * Removes duplicates within a single fetch: the same id (e.g. GamerPower "all"
+ * Removes duplicates within a list of deals: the same id (e.g. GamerPower "all"
  * and "games" both returning a giveaway), the same content, or the same deal
  * cross-posted on two sources. The first occurrence wins, so OzBargain (fetched
  * first) is preferred over gaming sources.
+ *
+ * Apply it to a profile's *filtered* matches, not the raw fetch: otherwise a
+ * copy the profile rejects (e.g. an OzBargain post below minVotes) would
+ * suppress a copy it accepts (the same giveaway on GamerPower).
  */
 export function dedupeBatch(deals) {
   const ids = new Set();
@@ -236,7 +238,11 @@ async function runOnceUnlocked(config) {
   // Sources that weren't seeded at startup (fetch failed then, or the source
   // was enabled later) have their current contents marked seen without
   // notifying — otherwise their whole feed would arrive as a flood.
-  const fetched = dedupeBatch(raw);
+  // One entry per id for logging/seeding; content-level dedup happens per
+  // profile after filtering (see dedupeBatch).
+  const byId = new Map();
+  for (const deal of raw) if (!byId.has(deal.id)) byId.set(deal.id, deal);
+  const fetched = [...byId.values()];
   const newSources = [...new Set(fetched.map(d => d.source))].filter(s => !_seededSources.has(s));
   for (const source of newSources) {
     const n = fetched.filter(d => d.source === source).length;
@@ -268,7 +274,7 @@ async function runOnceUnlocked(config) {
 
   // Step 2: per-profile filter; collect realtime sends and digest enqueues.
   for (const profile of profiles) {
-    const matches = filterForProfile(candidates, profile);
+    const matches = dedupeBatch(filterForProfile(candidates, profile));
     const mode = currentMode(profile, now);
     for (const deal of matches) {
       filteredAny.add(deal.id);
@@ -435,6 +441,5 @@ export function __resetState({ seededSources = [] } = {}) {
   _lastMode = new Map();
   _seededSources = new Set(seededSources);
   _retries = new Map();
-  _digestDue = new Set();
   lastSuccessfulPoll = 0;
 }
