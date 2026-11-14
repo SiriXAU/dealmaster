@@ -43,6 +43,9 @@ function getBrand(source) {
 
 const _lastDiscordSend = new Map();
 
+const DISCORD_TIMEOUT_MS = 15_000;
+const APPRISE_TIMEOUT_MS = 60_000;
+
 /**
  * Sends a notification for a single deal to the given Apprise URLs.
  * Discord URLs (discord://id/token) receive a rich embed via the webhook API.
@@ -126,6 +129,7 @@ async function postDiscord(webhookUrl, payload) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(DISCORD_TIMEOUT_MS),
       });
       if (res.ok) return true;
       if (res.status === 429) {
@@ -311,10 +315,12 @@ function runApprise(title, body, urls) {
   return new Promise(resolve => {
     execFile(
       'apprise',
-      ['--title', title, '--body', body, ...urls],
+      // "--" ends option parsing so a URL can never be read as an apprise flag.
+      ['--title', title, '--body', body, '--', ...urls],
+      { timeout: APPRISE_TIMEOUT_MS },
       (err, _stdout, stderr) => {
         if (err) {
-          log.error(`Apprise exited with code ${err.code}: ${stderr}`);
+          log.error(`Apprise failed (${err.killed ? 'timed out' : `exit code ${err.code}`}): ${stderr}`);
           resolve(false);
         } else {
           resolve(true);

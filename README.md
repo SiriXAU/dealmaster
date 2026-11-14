@@ -27,16 +27,18 @@ Dealmaster monitors deal feeds and sends notifications via [Apprise](https://git
 - **Input validation** — settings POST endpoint validates all fields and returns structured error responses
 - Category, keyword, and minimum-vote filtering to reduce noise (gaming sources bypass the vote threshold)
 - **Content-based deduplication** — prevents re-notification when a deal is reposted with a different ID (hashes title + link + price)
-- Startup heartbeat — sends a notification for the most recent deal on launch so you know it's live
+- Startup heartbeat — sends a notification for the most recent not-yet-seen matching deal on launch so you know it's live (disable with `STARTUP_NOTIFICATION=false`)
 - Persistent seen-deal tracking and content hash store to prevent duplicate notifications across restarts
 - **Notification history** — last 50 notified deals stored and viewable via `GET /api/history`
 - **Recent Deals tab** — web UI tab showing all deals (notified, queued for digest, and filtered) from the last 24 hours with profile-match chips and filter reasons
 - **Health endpoint** — `GET /health` returns JSON health status (200/503) based on poll cycle freshness
-- Retry logic with exponential backoff on feed fetch failures (5xx, 429, network errors)
+- Retry logic with exponential backoff on feed fetch failures (5xx, 429, timeouts, network errors); all outbound requests have timeouts
+- Failed realtime notifications are retried on the next polls (up to 3 attempts) instead of being dropped
+- **Optional password protection** for the web UI (`WEB_PASSWORD`), CSRF protection on the settings API, and notification URLs are never returned in full by the API
 - Discord webhook rate limiting with `Retry-After` header handling
 - **Structured logging** — timestamped, levelled log output; configurable via `LOG_LEVEL` env var
 - Graceful shutdown on `SIGTERM`/`SIGINT` (plays well with `podman-compose down`) — pending digests are persisted before exit
-- **Test suite** — 83 unit tests across filter, fetcher, config, notifier, store, scheduler, digest queue, and settings modules; `npm test`
+- **Test suite** — unit tests across filter, fetcher, config, notifier, store, scheduler, digest queue, settings, monitor, and web modules; `npm test` (runs in CI on every push and pull request)
 
 ---
 
@@ -191,7 +193,14 @@ With the above set, the UI is accessible at `http://localhost:9000` on the host 
 
 ### Restricting access
 
-The web UI has no authentication. If you're running Dealmaster on a server rather than locally, use a reverse proxy (nginx, Caddy, Traefik) to restrict access or add basic auth. Alternatively, remove the `ports` binding from `docker-compose.yml` and access the UI via an SSH tunnel:
+Set `WEB_PASSWORD` to require HTTP basic auth for the web UI and API (any username is accepted; `/health` stays open for container health checks). Without it, anyone who can reach the port can change your settings.
+
+Other protections are always on:
+
+- `POST /api/settings` only accepts `Content-Type: application/json` and rejects requests whose `Origin` doesn't match the host, so other websites you visit can't change your settings. If you serve the UI through a reverse proxy that rewrites the `Host` header, list the public origin(s) in `WEB_TRUSTED_ORIGINS` (e.g. `https://deals.example.com`).
+- Notification URLs contain webhook tokens, so `GET /api/settings` returns them masked (`discord://••••abcd`). Saving a masked URL unchanged keeps the stored one; to change a URL, replace it in full.
+
+For a server deployment you can also put Dealmaster behind a reverse proxy (nginx, Caddy, Traefik), or remove the `ports` binding from `docker-compose.yml` and access the UI via an SSH tunnel:
 
 ```bash
 ssh -L 8080:localhost:8080 your-server
@@ -205,8 +214,8 @@ ssh -L 8080:localhost:8080 your-server
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/` | HTML settings UI |
-| `GET` | `/api/settings` | Current configuration as JSON |
-| `POST` | `/api/settings` | Save new configuration (validated, returns `{error, field}` on failure) |
+| `GET` | `/api/settings` | Current configuration as JSON (notification URLs masked) |
+| `POST` | `/api/settings` | Save new configuration — requires `Content-Type: application/json` and a same-origin request (validated, returns `{error, field}` on failure) |
 | `GET` | `/api/history` | Last 50 notified deals as JSON array |
 | `GET` | `/api/deals` | All deals from the last 24 hours with filter/notify status |
 | `GET` | `/health` | Health status — `{"healthy":true,"lastPollMsAgo":…}` (200/503) |
@@ -224,7 +233,7 @@ These seed the auto-created `default` filter profile on first run, before any `s
 | `KEYWORDS` | No | _(all)_ | Comma-separated keyword filter — matches title, description, and store name |
 | `POLL_INTERVAL_SECONDS` | No | `120` | Seconds between feed checks — minimum `30` |
 | `MIN_VOTES` | No | `0` | Minimum OzBargain vote count required to notify (does not affect gaming sources) |
-| `MAX_SEEN_DEALS` | No | `500` | Maximum deal IDs to retain in the persistence store |
+| `MAX_SEEN_DEALS` | No | `500` | Maximum deal IDs to retain in the persistence store (whole number ≥ 1) |
 | `LOG_LEVEL` | No | `info` | Log verbosity: `debug`, `info`, `warn`, or `error` |
 | `GAMERPOWER_ENABLED` | No | `false` | Set to `true` to enable the GamerPower all-giveaways feed |
 | `GAMERPOWER_GAMES_ENABLED` | No | `false` | Set to `true` to enable the GamerPower full-games-only feed |
@@ -232,6 +241,9 @@ These seed the auto-created `default` filter profile on first run, before any `s
 | `EPICBUNDLE_ENABLED` | No | `false` | Set to `true` to enable the EpicBundle feed |
 | `DATA_DIR` | No | `/data` | Path for persistence files inside the container — not configurable via web UI |
 | `WEB_PORT` | No | `8080` | Host port mapped to the web settings UI (container always listens on 8080 internally) |
+| `WEB_PASSWORD` | No | _(none)_ | Require HTTP basic auth with this password for the web UI and API |
+| `WEB_TRUSTED_ORIGINS` | No | _(none)_ | Comma-separated extra origins allowed to POST settings (for reverse proxies that rewrite `Host`) |
+| `STARTUP_NOTIFICATION` | No | `true` | Set to `false` to skip the startup liveness notification |
 
 `APPRISE_URLS` is required on the **first run only**. Once you've saved settings via the web UI, the container can start without it.
 
@@ -377,6 +389,8 @@ Open `http://localhost:8080`, scroll to the **Gaming Sources** card, and toggle 
 
 On startup, Dealmaster fetches all enabled sources in parallel and seeds their current items as seen — the same way it handles OzBargain. Only one startup notification is sent (the most recent deal across all enabled sources) to avoid flooding your channel.
 
+The same seeding happens when a source returns deals for the first time later on — for example if it was unreachable at startup, or you enable it in the web UI — so its existing giveaways are never sent as a burst.
+
 ---
 
 ## Startup Behaviour
@@ -386,11 +400,11 @@ On every start Dealmaster:
 1. Loads configuration from `settings.json` (if it exists) or environment variables
 2. Starts the web settings UI
 3. Fetches the current feed from OzBargain and any enabled gaming sources (in parallel)
-4. Sends a notification for the single most recent (filtered) deal across all sources as a liveness signal
+4. Sends a notification for the most recent matching deal that hasn't been seen before, as a liveness signal (skipped if every current deal was already seen, or if `STARTUP_NOTIFICATION=false`)
 5. Marks all current feed items and their content hashes as seen
 6. Enters the regular poll loop
 
-This means you always receive a startup notification confirming the tool is running, and the first real poll will only notify on deals that appear *after* that point.
+The first real poll will only notify on deals that appear *after* that point. If a source can't be reached at startup, it is seeded silently on its first successful poll rather than sending its whole feed.
 
 ---
 
@@ -523,14 +537,14 @@ The default is `info`.
 ```
 
 1. `index.js` loads `settings.json` (if present), migrates any legacy single-filter shape into a `default` profile, builds config, starts the web UI, registers shutdown handlers (which persist `pending-digest.json`), and calls `startMonitor()`
-2. On startup, `monitor.js` fetches all enabled sources, sends a startup notification for the most recent deal that matches the first profile, seeds all items and content/fuzzy hashes as seen, then starts the poll interval and the per-profile digest timers
-3. On each poll, `fetcher.js` calls `fetchAllDeals(config)` which fetches OzBargain plus any enabled gaming sources **in parallel**, normalising each item into a consistent deal shape. Failed fetches are retried with exponential backoff (up to 3 attempts). GamerPower is fetched via their JSON API; EpicBundle uses RSS
+2. On startup, `monitor.js` fetches all enabled sources, sends a startup notification for the most recent deal that matches the first profile, seeds all items and content/fuzzy hashes as seen, then starts the poll loop (each poll is scheduled only after the previous one finishes) and the per-profile digest timers
+3. On each poll, `fetcher.js` calls `fetchAllDeals(config)` which fetches OzBargain plus any enabled gaming sources **in parallel**, normalising each item into a consistent deal shape, then removes duplicates within the batch (same id, same content, or the same deal on two sources). Failed fetches are retried with exponential backoff (up to 3 retries). GamerPower is fetched via their JSON API; EpicBundle uses RSS
 4. For **each profile**, `filter.js` runs `filterForProfile(deals, profile)` against the profile's own category whitelist, keyword list, and minimum-vote threshold (the threshold only applies to OzBargain deals)
 5. `store.js` filters out already-seen deals using three layers: exact GUID/link, content hash (`title+link+price`), and fuzzy hash (normalised title + price). The fuzzy layer collapses cross-source duplicates within the 24h window
 6. `scheduler.js` decides each profile's effective mode for *now*: realtime, digest, or quiet (quiet wins inside any quiet-hour window). Realtime matches go straight to `notifier.js`; digest/quiet matches go into `digestQueue.js`
 7. `notifier.js` sends notifications — Discord embeds use per-source branding with rate limiting (1s minimum interval, automatic 429 retry); all other URLs use the Apprise CLI. Digest deliveries fold up to 10 deals into a single embed/markdown message
-8. Per-profile digest timers re-arm every poll cycle. They fire either at `digestAt` (in the profile's timezone) or when a quiet-hour window ends, draining the queue into one digest per profile
-9. Newly seen IDs and hashes are written back to disk, a history entry is appended, the deal log is updated with profile-match and queued/notified status, and `/tmp/health` is touched
+8. Per-profile digest timers re-arm every poll cycle. They fire either at `digestAt` (in the profile's timezone) or when a quiet-hour window ends, draining the queue into one digest per profile. If a digest profile's `digestAt` falls inside its quiet hours, the digest is sent when the quiet window ends
+9. Newly seen IDs and hashes are written back to disk, a history entry is appended, the deal log is updated with profile-match and queued/notified status, and the health timestamp is updated. All data files are written atomically (temp file + rename) so a crash can't corrupt them
 10. When settings are saved via the web UI, `settings.js` validates and writes `settings.json`, the config is rebuilt, and the poll interval restarts with the new settings — no container restart needed
 
 ---
@@ -543,7 +557,8 @@ dealmaster/
 ├── src/
 │   ├── config.js           # Config loading — settings.json → env var → default
 │   ├── settings.js         # Profile schema, validation, legacy migration
-│   ├── web.js              # HTTP server — settings UI, /api/*, /health
+│   ├── web.js              # HTTP server — /api/*, /health, auth + CSRF checks, URL masking
+│   ├── fsUtil.js           # Atomic file writes
 │   ├── fetcher.js          # Feed fetching with retry — OzBargain RSS, GamerPower JSON API, EpicBundle RSS
 │   ├── filter.js           # Per-profile category, keyword, and vote filtering
 │   ├── monitor.js          # Multi-profile poll loop, digest scheduling, health tracking
@@ -562,8 +577,13 @@ dealmaster/
 │   ├── store.test.js       # Content hash + fuzzy hash + persistence tests
 │   ├── scheduler.test.js   # Timezone/quiet-hours/digestAt logic tests
 │   ├── digestQueue.test.js # Queue enqueue/drain/cap tests
-│   └── settings.test.js    # Profile schema + legacy migration tests
-├── Dockerfile              # node:22-alpine image with Python3 + apprise
+│   ├── settings.test.js    # Profile schema + legacy migration tests
+│   ├── monitor.test.js     # Poll cycle: dedup, retries, seeding, digest queueing
+│   └── web.test.js         # Web API: masking, CSRF, auth, validation
+├── public/
+│   └── index.html          # Web settings UI
+├── Dockerfile              # node:22-alpine image with Python3 + apprise; runs as the `node` user
+├── docker-entrypoint.sh    # Fixes /data ownership, then drops root privileges
 ├── docker-compose.yml      # Compose definition with HTTP healthcheck and web port
 ├── .env.example            # Environment variable template
 ├── .gitignore

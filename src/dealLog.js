@@ -3,6 +3,7 @@ import path from 'path';
 import { createLogger } from './logger.js';
 import { matchesCategories, meetsMinVotes, matchesKeywords } from './filter.js';
 import { contentHash, fuzzyHash } from './store.js';
+import { writeFileAtomic } from './fsUtil.js';
 
 const log = createLogger('deallog');
 
@@ -29,8 +30,7 @@ async function saveDealLog(dataDir, deals) {
 
   const filePath = path.join(dataDir, 'deal-log.json');
   try {
-    await fs.mkdir(dataDir, { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify(pruned), 'utf-8');
+    await writeFileAtomic(filePath, JSON.stringify(pruned));
   } catch (err) {
     log.error(`Failed to save deal log: ${err.message}`);
   }

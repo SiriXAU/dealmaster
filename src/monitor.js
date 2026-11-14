@@ -1,4 +1,3 @@
-import fs from 'fs';
 import { createLogger } from './logger.js';
 import { fetchAllDeals } from './fetcher.js';
 import { filterForProfile } from './filter.js';
@@ -6,14 +5,32 @@ import { loadSeenDeals, saveSeenDeals, contentHash, fuzzyHash } from './store.js
 import { sendDealNotification, sendDigest, sleep } from './notifier.js';
 import { addToHistory } from './history.js';
 import { logDeals } from './dealLog.js';
-import { currentMode, nextDigestAt, quietWindowEnd } from './scheduler.js';
+import { currentMode, scheduledMode, nextDigestAt, quietWindowEnd } from './scheduler.js';
 import { loadQueue, saveQueue, enqueue, drain, size as queueSize } from './digestQueue.js';
 
 const log = createLogger('monitor');
 
-const HEALTH_FILE = '/tmp/health';
+const INTER_POST_DELAY_MS = 2000;
+const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** Total delivery attempts (first try + retries on later polls) for a realtime deal. */
+export const MAX_SEND_ATTEMPTS = 3;
+
+// Side-effecting dependencies, swappable in tests.
+const defaultDeps = { fetchAllDeals, sendDealNotification, sendDigest, sleep };
+let deps = { ...defaultDeps };
 
 let lastSuccessfulPoll = 0;
+
+let _pollTimer = null;
+let _pollGeneration = 0;        // bumped on every start/stop so stale loops exit
+let _lock = Promise.resolve();  // serialises polls and digest flushes
+let _digestTimers = new Map();  // profileId → timeout handle
+let _activeQueue = null;        // Map<profileId, Array<{deal, queuedAt}>>
+let _activeConfig = null;       // last config we polled with
+let _lastMode = new Map();      // profileId → 'realtime'|'digest'|'quiet' (previous cycle)
+let _seededSources = new Set(); // sources whose current feed contents are already marked seen
+let _retries = new Map();       // profileId → Array<{ deal, attempts }>
+let _digestDue = new Set();     // digest profiles whose digestAt fell inside quiet hours
 
 export function getLastPollTime() {
   return lastSuccessfulPoll;
@@ -21,41 +38,50 @@ export function getLastPollTime() {
 
 function touchHealth() {
   lastSuccessfulPoll = Date.now();
-  try {
-    fs.writeFileSync(HEALTH_FILE, String(lastSuccessfulPoll));
-  } catch {
-    // non-fatal
-  }
 }
 
-const INTER_POST_DELAY_MS = 2000;
-const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
-
-let _pollTimer = null;
-let _digestTimers = new Map(); // profileId → timeout handle
-let _activeQueue = null;        // Map<profileId, Array<{deal, queuedAt}>>
-let _activeConfig = null;       // last config we polled with
-let _lastMode = new Map();      // profileId → 'realtime'|'digest'|'quiet' (previous cycle)
+/**
+ * Runs `fn` after any in-flight poll/flush has finished, so two cycles never
+ * read and write seen-deals.json or the digest queue at the same time.
+ */
+function withLock(fn) {
+  const run = _lock.then(fn, fn);
+  _lock = run.catch(() => {});
+  return run;
+}
 
 export function stopPollLoop() {
+  _pollGeneration++;
   if (_pollTimer !== null) {
-    clearInterval(_pollTimer);
+    clearTimeout(_pollTimer);
     _pollTimer = null;
   }
   for (const t of _digestTimers.values()) clearTimeout(t);
   _digestTimers.clear();
 }
 
+/**
+ * Starts (or restarts) the poll loop. The next poll is only scheduled once the
+ * current one has finished, so a slow cycle can never overlap the next one.
+ */
 export function startPollLoop(config) {
   stopPollLoop();
   _activeConfig = config;
-  _pollTimer = setInterval(async () => {
+  const generation = _pollGeneration;
+
+  const tick = async () => {
+    if (generation !== _pollGeneration) return;
     try {
-      await runOnce(config);
+      await withLock(() => runOnceUnlocked(config));
     } catch (err) {
       log.error(`Unexpected error during poll: ${err.message}`);
     }
-  }, config.pollIntervalMs);
+    if (generation === _pollGeneration) {
+      _pollTimer = setTimeout(tick, config.pollIntervalMs);
+    }
+  };
+
+  _pollTimer = setTimeout(tick, config.pollIntervalMs);
   log.info(`Poll loop started (interval: ${config.pollIntervalMs / 1000}s)`);
   rescheduleDigestTimers(config);
 }
@@ -80,38 +106,61 @@ async function ensureQueue(config) {
   return _activeQueue;
 }
 
+/**
+ * When the next flush for this profile should happen, or null if none.
+ *  - digest profiles flush at digestAt; if digestAt fell inside quiet hours
+ *    the digest is held and sent when the quiet window ends instead.
+ *  - realtime/quiet profiles inside quiet hours flush when the window ends.
+ */
+function nextFlushTarget(profile, now) {
+  const quiet = currentMode(profile, now) === 'quiet';
+  if (scheduledMode(profile) === 'digest') {
+    const digestAt = nextDigestAt(profile, now);
+    if (quiet && _digestDue.has(profile.id)) {
+      const quietEnd = quietWindowEnd(profile, now);
+      if (quietEnd != null && (digestAt == null || quietEnd < digestAt)) return quietEnd;
+    }
+    return digestAt;
+  }
+  return quiet ? quietWindowEnd(profile, now) : null;
+}
+
 function rescheduleDigestTimers(config) {
   for (const t of _digestTimers.values()) clearTimeout(t);
   _digestTimers.clear();
   if (!Array.isArray(config?.profiles)) return;
 
+  const generation = _pollGeneration;
   const now = Date.now();
   for (const profile of config.profiles) {
-    const mode = currentMode(profile, now);
-    let target = null;
-
-    if (mode === 'quiet') {
-      target = quietWindowEnd(profile, now);
-    } else if (mode === 'digest') {
-      target = nextDigestAt(profile, now);
-    }
-
+    const target = nextFlushTarget(profile, now);
     if (target == null) continue;
 
-    const delay = Math.max(0, target - now);
-    const handle = setTimeout(async () => {
-      try {
-        await flushProfileDigest(profile.id, config);
-      } catch (err) {
-        log.error(`Digest flush failed for "${profile.id}": ${err.message}`);
-      }
-      // Re-arm for the next boundary.
-      rescheduleDigestTimers(_activeConfig ?? config);
-    }, delay);
+    const handle = setTimeout(() => {
+      if (generation !== _pollGeneration) return;
+      withLock(async () => {
+        const cfg = _activeConfig ?? config;
+        const current = cfg.profiles?.find(p => p.id === profile.id);
+        if (!current) return;
+        const firedAt = Date.now();
+        if (scheduledMode(current) === 'digest' && currentMode(current, firedAt) === 'quiet') {
+          // digestAt landed inside quiet hours — hold until the window ends.
+          _digestDue.add(current.id);
+          return;
+        }
+        _digestDue.delete(current.id);
+        await flushProfileDigest(current.id, cfg);
+      })
+        .catch(err => log.error(`Digest flush failed for "${profile.id}": ${err.message}`))
+        .finally(() => {
+          if (generation === _pollGeneration) rescheduleDigestTimers(_activeConfig ?? config);
+        });
+    }, Math.max(0, target - now));
     _digestTimers.set(profile.id, handle);
   }
 }
 
+/** Sends a profile's queued deals as one digest. Caller must hold the lock. */
 async function flushProfileDigest(profileId, config) {
   const queue = await ensureQueue(config);
   const profile = config.profiles.find(p => p.id === profileId);
@@ -119,11 +168,9 @@ async function flushProfileDigest(profileId, config) {
   const drained = drain(queue, profileId);
   if (drained.length === 0) return;
   log.info(`Flushing digest for "${profileId}" — ${drained.length} deal(s)`);
-  const { ok } = await sendDigest(drained, profile.appriseUrls, profile.name);
+  const { ok } = await deps.sendDigest(drained, profile.appriseUrls, profile.name);
   if (ok) {
-    for (const d of drained) {
-      await addToHistory(config.dataDir, d).catch(() => {});
-    }
+    await addToHistory(config.dataDir, drained);
   } else {
     log.warn(`Digest delivery failed for "${profileId}" — re-queueing ${drained.length} deal(s)`);
     for (const d of drained) enqueue(queue, profileId, d);
@@ -131,57 +178,112 @@ async function flushProfileDigest(profileId, config) {
   await saveQueue(config.dataDir, queue);
 }
 
-function evaluateProfile(profile, deals) {
-  return filterForProfile(deals, profile);
+/**
+ * Removes duplicates within a single fetch: the same id (e.g. GamerPower "all"
+ * and "games" both returning a giveaway), the same content, or the same deal
+ * cross-posted on two sources. The first occurrence wins, so OzBargain (fetched
+ * first) is preferred over gaming sources.
+ */
+export function dedupeBatch(deals) {
+  const ids = new Set();
+  const hashes = new Set();
+  const fuzzies = new Set();
+  const out = [];
+  for (const deal of deals) {
+    const ch = contentHash(deal);
+    const fh = fuzzyHash(deal);
+    if (ids.has(deal.id) || hashes.has(ch) || fuzzies.has(fh)) continue;
+    ids.add(deal.id);
+    hashes.add(ch);
+    fuzzies.add(fh);
+    out.push(deal);
+  }
+  return out;
+}
+
+function addRetry(profileId, deal, attempts) {
+  if (attempts >= MAX_SEND_ATTEMPTS) {
+    log.error(`Giving up on "${deal.title}" for profile "${profileId}" after ${attempts} failed attempt(s)`);
+    return;
+  }
+  const list = _retries.get(profileId) ?? [];
+  list.push({ deal, attempts });
+  _retries.set(profileId, list);
 }
 
 /**
  * Runs a single poll cycle: fetch → per-profile filter/dispatch → persist.
+ * Waits for any in-flight cycle or digest flush to finish first.
  * @returns {Promise<number>} total realtime notifications sent
  */
-export async function runOnce(config) {
-  _activeConfig = config;
-  const fetched = await fetchAllDeals(config);
-  if (fetched.length === 0) return 0;
+export function runOnce(config) {
+  return withLock(() => runOnceUnlocked(config));
+}
 
+async function runOnceUnlocked(config) {
+  _activeConfig = config;
+  const raw = await deps.fetchAllDeals(config);
   const queue = await ensureQueue(config);
+  const now = Date.now();
+  const profiles = Array.isArray(config.profiles) ? config.profiles : [];
+  const profileById = new Map(profiles.map(p => [p.id, p]));
+
   const { ids: seenIds, hashes, fuzzies } = await loadSeenDeals(config.dataDir);
   const seenIdsBefore = new Set(seenIds);
-  const now = Date.now();
+  const hashesBefore  = new Map(hashes);
+  const fuzziesBefore = new Map(fuzzies);
 
-  const profiles = Array.isArray(config.profiles) ? config.profiles : [];
+  // Sources that weren't seeded at startup (fetch failed then, or the source
+  // was enabled later) have their current contents marked seen without
+  // notifying — otherwise their whole feed would arrive as a flood.
+  const fetched = dedupeBatch(raw);
+  const newSources = [...new Set(fetched.map(d => d.source))].filter(s => !_seededSources.has(s));
+  for (const source of newSources) {
+    const n = fetched.filter(d => d.source === source).length;
+    log.info(`Seeding ${n} existing deal(s) from "${source}" without notifying`);
+  }
+  const candidates = fetched.filter(d => _seededSources.has(d.source));
+
   const profileMatches = new Map(); // dealId → string[] of profile ids
-  const filteredAny = new Set();    // dealId, deal that any profile accepted
+  const filteredAny = new Set();    // dealId of any deal some profile accepted
   const notifiedIds = new Set();
   const queuedIds   = new Set();
+  const realtimeSends = []; // [{ deal, profile, attempts }]
 
-  // Step 1: per-profile filter; collect realtime sends and digest enqueues.
-  // Order matters slightly — we evaluate profiles in array order, but matches
-  // for a deal go to ALL matching profiles regardless of dedup.
-  const realtimeSends = []; // [{ deal, urls, profile }]
+  // Step 1: retry earlier failed realtime sends (or queue them if the profile
+  // is no longer realtime). Retries for deleted profiles are dropped.
+  const pendingRetries = _retries;
+  _retries = new Map();
+  for (const [profileId, list] of pendingRetries) {
+    const profile = profileById.get(profileId);
+    if (!profile) continue;
+    for (const { deal, attempts } of list) {
+      if (currentMode(profile, now) === 'realtime') {
+        realtimeSends.push({ deal, profile, attempts });
+      } else {
+        enqueue(queue, profile.id, deal, now);
+      }
+    }
+  }
 
+  // Step 2: per-profile filter; collect realtime sends and digest enqueues.
   for (const profile of profiles) {
-    const candidates = evaluateProfile(profile, fetched);
-    const newOnes = candidates.filter(deal => {
-      if (seenIdsBefore.has(deal.id)) return false;
-      const ch = contentHash(deal);
-      const seenH = hashes.get(ch);
-      if (seenH && (now - seenH) < DEDUP_WINDOW_MS) return false;
-      const fh = fuzzyHash(deal);
-      const seenF = fuzzies.get(fh);
-      if (seenF && (now - seenF) < DEDUP_WINDOW_MS) return false;
-      return true;
-    });
-
+    const matches = filterForProfile(candidates, profile);
     const mode = currentMode(profile, now);
-    for (const deal of newOnes) {
+    for (const deal of matches) {
       filteredAny.add(deal.id);
+      if (seenIdsBefore.has(deal.id)) continue;
+      const seenH = hashesBefore.get(contentHash(deal));
+      if (seenH && (now - seenH) < DEDUP_WINDOW_MS) continue;
+      const seenF = fuzziesBefore.get(fuzzyHash(deal));
+      if (seenF && (now - seenF) < DEDUP_WINDOW_MS) continue;
+
       const list = profileMatches.get(deal.id) ?? [];
       list.push(profile.id);
       profileMatches.set(deal.id, list);
 
       if (mode === 'realtime') {
-        realtimeSends.push({ deal, urls: profile.appriseUrls, profile });
+        realtimeSends.push({ deal, profile, attempts: 0 });
       } else {
         enqueue(queue, profile.id, deal, now);
         queuedIds.add(deal.id);
@@ -189,32 +291,34 @@ export async function runOnce(config) {
     }
   }
 
-  // Also annotate deals that passed any profile filter but were skipped due to
-  // seen/dedup, so the deal log can show a meaningful reason.
-  for (const profile of profiles) {
-    for (const deal of evaluateProfile(profile, fetched)) {
-      filteredAny.add(deal.id);
-    }
-  }
-
-  // Step 2: realtime delivery, sequential with inter-post delay.
+  // Step 3: realtime delivery, sequential with inter-post delay. Failures are
+  // retried on the next poll(s) for that profile only.
   let notified = 0;
+  const historyBatch = [];
   for (let i = 0; i < realtimeSends.length; i++) {
-    const { deal, urls, profile } = realtimeSends[i];
-    const { ok } = await sendDealNotification(deal, urls);
+    const { deal, profile, attempts } = realtimeSends[i];
+    let ok = false;
+    try {
+      ({ ok } = await deps.sendDealNotification(deal, profile.appriseUrls));
+    } catch (err) {
+      log.error(`Notification error for "${deal.title}": ${err.message}`);
+    }
     if (ok) {
       notified++;
       notifiedIds.add(deal.id);
-      await addToHistory(config.dataDir, deal);
+      historyBatch.push(deal);
       log.info(`Notified [${profile.id}]: ${deal.title} [${deal.category}] (+${deal.votes})`);
+    } else {
+      addRetry(profile.id, deal, attempts + 1);
     }
     if (i < realtimeSends.length - 1) {
-      await sleep(INTER_POST_DELAY_MS);
+      await deps.sleep(INTER_POST_DELAY_MS);
     }
   }
+  await addToHistory(config.dataDir, historyBatch);
 
-  // Step 3: handle "quiet → realtime" flush. If a profile was non-realtime last
-  // cycle but is realtime now, drain its queue immediately as one digest.
+  // Step 4: "quiet → realtime" flush. If a profile was non-realtime last cycle
+  // but is realtime now, drain its queue immediately as one digest.
   for (const profile of profiles) {
     const prev = _lastMode.get(profile.id);
     const curr = currentMode(profile, now);
@@ -228,73 +332,109 @@ export async function runOnce(config) {
     _lastMode.set(profile.id, curr);
   }
 
-  // Step 4: mark all fetched deals seen (so we don't re-evaluate forever).
-  for (const deal of fetched) {
+  // Step 5: mark every fetched deal (including in-batch duplicates) seen.
+  // Re-inserting ids keeps still-live deals at the "recent" end so trimming
+  // to maxSeenDeals evicts the oldest ones first.
+  for (const deal of raw) {
+    seenIds.delete(deal.id);
     seenIds.add(deal.id);
     hashes.set(contentHash(deal), now);
     fuzzies.set(fuzzyHash(deal), now);
   }
+  for (const source of newSources) _seededSources.add(source);
 
-  // Step 5: persist.
+  // Step 6: persist.
   await saveSeenDeals(seenIds, hashes, fuzzies, config.dataDir, config.maxSeenDeals);
   await saveQueue(config.dataDir, queue);
 
-  // Build the "filtered" array for the deal log: every deal that any profile accepted.
-  const filteredArr = fetched.filter(d => filteredAny.has(d.id));
-  await logDeals(
-    config.dataDir,
-    fetched,
-    filteredArr,
-    seenIdsBefore,
-    hashes,
-    fuzzies,
-    notifiedIds,
-    profileMatches,
-    queuedIds,
-    config,
-  );
-  touchHealth();
+  if (fetched.length > 0) {
+    const filteredArr = fetched.filter(d => filteredAny.has(d.id));
+    await logDeals(
+      config.dataDir,
+      fetched,
+      filteredArr,
+      seenIdsBefore,
+      hashesBefore,
+      fuzziesBefore,
+      notifiedIds,
+      profileMatches,
+      queuedIds,
+      config,
+    );
+    touchHealth();
+  }
 
   // Re-arm digest timers in case schedules shifted across the poll boundary.
-  rescheduleDigestTimers(config);
+  if (_pollTimer !== null) rescheduleDigestTimers(config);
 
   return notified;
 }
 
 /**
- * On startup, sends the most recent matching deal for the first profile (so
- * the user sees the bot is live), then seeds everything else as seen.
+ * On startup, optionally sends the most recent unseen matching deal for the
+ * first profile (so the user sees the bot is live), then seeds everything else
+ * as seen. Any source that fails to fetch here is seeded on its first
+ * successful poll instead, so a network outage at boot never causes a flood.
  */
 export async function startMonitor(config) {
   _activeConfig = config;
-  const fetched = await fetchAllDeals(config);
-  const queue = await ensureQueue(config);
-  const { ids: seenIds, hashes, fuzzies } = await loadSeenDeals(config.dataDir);
-
   const profiles = Array.isArray(config.profiles) ? config.profiles : [];
-  if (profiles.length > 0 && fetched.length > 0) {
-    const head = profiles[0];
-    const matches = filterForProfile(fetched, head);
-    if (matches.length > 0) {
-      const latest = matches[0];
-      log.info(`Sending startup deal: ${latest.title} [profile=${head.id}]`);
-      await sendDealNotification(latest, head.appriseUrls);
-    }
-  }
-
   const now = Date.now();
-  for (const deal of fetched) {
-    seenIds.add(deal.id);
-    hashes.set(contentHash(deal), now);
-    fuzzies.set(fuzzyHash(deal), now);
-  }
-  await saveSeenDeals(seenIds, hashes, fuzzies, config.dataDir, config.maxSeenDeals);
-  touchHealth();
-
-  // Initialise last-mode map.
   for (const p of profiles) _lastMode.set(p.id, currentMode(p, now));
 
-  log.info(`Ready. Watching for new deals every ${config.pollIntervalMs / 1000}s...`);
+  try {
+    await withLock(async () => {
+      const fetched = await deps.fetchAllDeals(config);
+      await ensureQueue(config);
+      const { ids: seenIds, hashes, fuzzies } = await loadSeenDeals(config.dataDir);
 
+      if (config.startupNotification !== false && profiles.length > 0 && fetched.length > 0) {
+        const head = profiles[0];
+        const latest = filterForProfile(fetched, head).find(d => !seenIds.has(d.id));
+        if (latest) {
+          log.info(`Sending startup deal: ${latest.title} [profile=${head.id}]`);
+          await deps.sendDealNotification(latest, head.appriseUrls);
+        }
+      }
+
+      for (const deal of fetched) {
+        seenIds.delete(deal.id);
+        seenIds.add(deal.id);
+        hashes.set(contentHash(deal), now);
+        fuzzies.set(fuzzyHash(deal), now);
+        _seededSources.add(deal.source);
+      }
+      await saveSeenDeals(seenIds, hashes, fuzzies, config.dataDir, config.maxSeenDeals);
+
+      if (fetched.length === 0) {
+        log.warn('Startup fetch returned no deals — sources will be seeded on their first successful poll.');
+      }
+    });
+  } catch (err) {
+    log.error(`Startup seeding failed: ${err.message} — sources will be seeded on their first successful poll.`);
+  }
+  touchHealth();
+
+  log.info(`Ready. Watching for new deals every ${config.pollIntervalMs / 1000}s...`);
   startPollLoop(config);
+}
+
+// ── Test hooks ────────────────────────────────────────────────────────────────
+
+/** Overrides side-effecting dependencies (fetch, send, sleep). Pass null to restore. */
+export function __setTestDeps(overrides) {
+  deps = overrides ? { ...defaultDeps, ...overrides } : { ...defaultDeps };
+}
+
+/** Resets all module state. `seededSources` pre-marks sources as seeded. */
+export function __resetState({ seededSources = [] } = {}) {
+  stopPollLoop();
+  _lock = Promise.resolve();
+  _activeQueue = null;
+  _activeConfig = null;
+  _lastMode = new Map();
+  _seededSources = new Set(seededSources);
+  _retries = new Map();
+  _digestDue = new Set();
+  lastSuccessfulPoll = 0;
 }

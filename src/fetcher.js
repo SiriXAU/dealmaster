@@ -5,6 +5,8 @@ const log = createLogger('fetcher');
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
+const REQUEST_TIMEOUT_MS = 15_000;
+
 const DEFAULT_HEADERS = {
   'User-Agent': USER_AGENT,
   'Accept': 'application/rss+xml, application/xml, text/xml, */*;q=0.8',
@@ -20,6 +22,7 @@ const ozbParser = new Parser({
     ],
   },
   headers: DEFAULT_HEADERS,
+  timeout: REQUEST_TIMEOUT_MS,
 });
 
 const genericParser = new Parser({
@@ -31,6 +34,7 @@ const genericParser = new Parser({
     ],
   },
   headers: DEFAULT_HEADERS,
+  timeout: REQUEST_TIMEOUT_MS,
 });
 
 const OZB_FEED_URL = 'https://www.ozbargain.com.au/deals/feed';
@@ -42,9 +46,29 @@ export const GAMING_FEED_URLS = {
   epicbundle: 'https://epicbundle.com/feed',
 };
 
+const RETRYABLE_CODES = new Set(['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT']);
+
+/**
+ * True for transient failures worth retrying: network errors, timeouts,
+ * 5xx responses and 429 rate limits. Covers both our own "HTTP nnn" errors
+ * and rss-parser's "Status code nnn" / "Request timed out" errors.
+ * Programming errors (e.g. a TypeError from a bug) are NOT retried.
+ */
+export function isRetryableError(err) {
+  if (!err) return false;
+  const msg = String(err.message ?? '');
+  if (/\b(?:HTTP|Status code) (?:5\d\d|429)\b/.test(msg)) return true;
+  if (/timed out/i.test(msg)) return true;
+  if (err.name === 'AbortError' || err.name === 'TimeoutError') return true;
+  if (RETRYABLE_CODES.has(err.code) || RETRYABLE_CODES.has(err.cause?.code)) return true;
+  // undici (global fetch) reports network failures as TypeError('fetch failed').
+  if (err.name === 'TypeError' && msg === 'fetch failed') return true;
+  return false;
+}
+
 /**
  * Retries an async operation with exponential backoff.
- * Retries on network errors, 5xx responses, and 429 rate limits.
+ * Retries on network errors, timeouts, 5xx responses, and 429 rate limits.
  * @param {Function} fn - Async function to retry
  * @param {string} label - Log label for the operation
  * @param {{ maxRetries?: number, baseDelay?: number }} options
@@ -55,15 +79,7 @@ async function retryWithBackoff(fn, label, { maxRetries = 3, baseDelay = 1000 } 
     try {
       return await fn();
     } catch (err) {
-      const isRetryable =
-        err.message?.includes('HTTP 5') ||
-        err.message?.includes('HTTP 429') ||
-        err.name === 'TypeError' || // network errors
-        err.code === 'ECONNRESET' ||
-        err.code === 'ETIMEDOUT' ||
-        err.code === 'ENOTFOUND';
-
-      if (!isRetryable || attempt === maxRetries) throw err;
+      if (!isRetryableError(err) || attempt === maxRetries) throw err;
 
       const delay = baseDelay * Math.pow(2, attempt);
       log.warn(`Retry ${attempt + 1}/${maxRetries} for ${label} in ${delay}ms (${err.message})`);
@@ -111,7 +127,10 @@ async function fetchRssFeed(sourceId, url) {
 async function fetchGamerPower(sourceId, apiUrl) {
   try {
     const data = await retryWithBackoff(async () => {
-      const res = await fetch(apiUrl, { headers: { 'User-Agent': USER_AGENT } });
+      const res = await fetch(apiUrl, {
+        headers: { 'User-Agent': USER_AGENT },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       if (!Array.isArray(json)) throw new Error('Non-array response');
@@ -148,10 +167,10 @@ export async function fetchAllDeals(config) {
  * rss-parser returns XML elements with attributes as { _: "text", $: { attr } }
  * objects rather than plain strings.
  */
-function extractCategory(raw) {
-  if (!raw) return 'Uncategorised';
-  if (typeof raw === 'string') return raw;
-  return raw._ ?? 'Uncategorised';
+function extractCategory(raw, fallback = 'Uncategorised') {
+  if (!raw) return fallback;
+  if (typeof raw === 'string') return raw.trim() || fallback;
+  return (typeof raw._ === 'string' && raw._.trim()) || fallback;
 }
 
 /**
@@ -193,7 +212,9 @@ export function normalizeOzbItem(item) {
   const meta  = item.ozbMeta ?? {};
   const attrs = meta['$'] ?? {};
 
-  const votes    = parseInt(attrs.votes ?? meta.votes ?? '0', 10);
+  // OzBargain publishes positive votes as `votes-pos` (and `votes-neg`);
+  // `votes` is accepted as a fallback for older/alternative feed shapes.
+  const votes    = parseInt(attrs['votes-pos'] ?? attrs.votes ?? meta.votes ?? '0', 10);
   const imageUrl = attrs.image ?? meta.image ?? null;
   const price    = attrs.price ?? extractPriceFromTitle(item.title) ?? null;
   const expiry   = attrs.expire ?? attrs.expiry ?? null;
@@ -248,7 +269,7 @@ function normalizeGamingItem(item, sourceId) {
     id:          item.guid ?? item.link ?? `${sourceId}:${title}`,
     title,
     link:        item.link ?? '',
-    category:    extractCategory(item.categories?.[0] ?? item.category) || 'Gaming',
+    category:    extractCategory(item.categories?.[0] ?? item.category, 'Gaming'),
     pubDate:     item.pubDate ?? item.isoDate ?? null,
     description: stripHtml(content),
     votes:       0,
@@ -291,18 +312,26 @@ export function normalizeGamerPowerItem(item, sourceId) {
   };
 }
 
+const NAMED_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+
+function decodeCodePoint(cp) {
+  return Number.isInteger(cp) && cp > 0 && cp <= 0x10FFFF ? String.fromCodePoint(cp) : '';
+}
+
 /**
- * Strips HTML tags and decodes common entities for plain-text output.
+ * Strips HTML tags and decodes named + numeric entities for plain-text output.
+ * Entities are decoded in a single pass so "&amp;lt;" becomes "&lt;", not "<".
  */
-function stripHtml(html) {
-  return html
+export function stripHtml(html) {
+  return String(html ?? '')
     .replace(/<[^>]+>/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ')
+    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, ent) => {
+      if (ent[0] === '#') {
+        const cp = ent[1] === 'x' || ent[1] === 'X' ? parseInt(ent.slice(2), 16) : parseInt(ent.slice(1), 10);
+        return decodeCodePoint(cp) || m;
+      }
+      return NAMED_ENTITIES[ent.toLowerCase()] ?? m;
+    })
     .replace(/\s+/g, ' ')
     .trim();
 }

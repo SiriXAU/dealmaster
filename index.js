@@ -63,4 +63,7 @@ startWebServer({
   },
 });
 
-startMonitor(activeConfig);
+startMonitor(activeConfig).catch(err => {
+  log.error(`Fatal error starting monitor: ${err.stack ?? err.message}`);
+  process.exit(1);
+});

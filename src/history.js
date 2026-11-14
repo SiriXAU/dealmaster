@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { createLogger } from './logger.js';
+import { writeFileAtomic } from './fsUtil.js';
 
 const log = createLogger('history');
 
@@ -24,27 +25,30 @@ export async function loadHistory(dataDir) {
 }
 
 /**
- * Appends a notified deal to the history and persists.
+ * Prepends one or more notified deals to the history and persists once.
+ * Never throws — history is informational, so failures are only logged.
  * @param {string} dataDir
- * @param {Object} deal - Normalized deal object
+ * @param {Object|Object[]} deals - Normalized deal object(s), oldest first
  */
-export async function addToHistory(dataDir, deal) {
-  const history = await loadHistory(dataDir);
-  history.unshift({
-    title: deal.title,
-    link: deal.link,
-    category: deal.category,
-    price: deal.price,
-    store: deal.store,
-    source: deal.source,
-    notifiedAt: new Date().toISOString(),
-  });
-  if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
-
-  const filePath = path.join(dataDir, 'history.json');
+export async function addToHistory(dataDir, deals) {
+  const list = Array.isArray(deals) ? deals : [deals];
+  if (list.length === 0) return;
   try {
-    await fs.mkdir(dataDir, { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify(history), 'utf-8');
+    const history = await loadHistory(dataDir);
+    const notifiedAt = new Date().toISOString();
+    for (const deal of list) {
+      history.unshift({
+        title: deal.title,
+        link: deal.link,
+        category: deal.category,
+        price: deal.price,
+        store: deal.store,
+        source: deal.source,
+        notifiedAt,
+      });
+    }
+    if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
+    await writeFileAtomic(path.join(dataDir, 'history.json'), JSON.stringify(history));
   } catch (err) {
     log.error(`Failed to save history: ${err.message}`);
   }

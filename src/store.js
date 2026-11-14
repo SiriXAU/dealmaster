@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
+import { writeFileAtomic } from './fsUtil.js';
 
 /**
  * Generates a content hash for deduplication.
@@ -67,29 +68,28 @@ export async function loadSeenDeals(dataDir) {
  * Trims the oldest hash entries when the total exceeds maxSize.
  */
 export async function saveSeenDeals(ids, hashes, fuzzies, dataDir, maxSize) {
-  await fs.mkdir(dataDir, { recursive: true });
   const filePath = path.join(dataDir, 'seen-deals.json');
 
-  // Build entries keyed by content hash; merge fuzzy hashes by timestamp match.
-  const byHash = new Map();
-  for (const [h, t] of hashes) {
-    byHash.set(h, { h, t, f: null });
-  }
-  // Pair each fuzzy hash with the entry that shares its timestamp (best-effort);
-  // otherwise emit it as its own row keyed only on f.
+  // Each row stores a content hash and/or a fuzzy hash with a shared
+  // timestamp. Pairing is purely a storage optimisation (the loader reads h and
+  // f independently), so pair fuzzies with any content hash of the same
+  // timestamp. Grouping by timestamp keeps this O(n).
+  const fuzziesByTime = new Map();
   for (const [f, t] of fuzzies) {
-    let paired = false;
-    for (const entry of byHash.values()) {
-      if (entry.t === t && entry.f === null) {
-        entry.f = f;
-        paired = true;
-        break;
-      }
-    }
-    if (!paired) byHash.set(`f:${f}`, { h: null, t, f });
+    const list = fuzziesByTime.get(t) ?? [];
+    list.push(f);
+    fuzziesByTime.set(t, list);
   }
 
-  let entries = Array.from(byHash.values());
+  const entries = [];
+  for (const [h, t] of hashes) {
+    const f = fuzziesByTime.get(t)?.pop() ?? null;
+    entries.push({ h, t, f });
+  }
+  for (const [t, list] of fuzziesByTime) {
+    for (const f of list) entries.push({ h: null, t, f });
+  }
+
   if (entries.length > maxSize) {
     entries.sort((a, b) => b.t - a.t);
     entries.length = maxSize;
@@ -100,7 +100,7 @@ export async function saveSeenDeals(ids, hashes, fuzzies, dataDir, maxSize) {
     idArr = idArr.slice(idArr.length - maxSize);
   }
 
-  await fs.writeFile(filePath, JSON.stringify({ ids: idArr, entries }), 'utf-8');
+  await writeFileAtomic(filePath, JSON.stringify({ ids: idArr, entries }));
 }
 
 // Re-export for backward compat

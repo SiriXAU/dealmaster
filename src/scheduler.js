@@ -28,27 +28,36 @@ export function parseHHMM(str) {
 /**
  * Returns the profile timezone if it parses as a valid IANA zone, else null.
  */
+const _formatterCache = new Map(); // timezone → Intl.DateTimeFormat | null (invalid)
+
+function getFormatter(tz) {
+  if (_formatterCache.has(tz)) return _formatterCache.get(tz);
+  let fmt = null;
+  try {
+    fmt = new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  } catch {
+    fmt = null;
+  }
+  _formatterCache.set(tz, fmt);
+  return fmt;
+}
+
 export function validateTimezone(tz) {
   if (typeof tz !== 'string' || tz.length === 0) return null;
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: tz });
-    return tz;
-  } catch {
-    return null;
-  }
+  return getFormatter(tz) ? tz : null;
 }
 
 /**
  * Returns the wall-clock { hour, minute } for `now` (ms) in the given timezone.
  */
 export function wallClock(now, timezone) {
-  const tz = validateTimezone(timezone) ?? 'UTC';
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: tz,
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).formatToParts(new Date(now));
+  const fmt = getFormatter(validateTimezone(timezone) ?? 'UTC');
+  const parts = fmt.formatToParts(new Date(now));
   let h = 0, mi = 0;
   for (const p of parts) {
     if (p.type === 'hour')   h  = Number(p.value);
@@ -89,6 +98,13 @@ function normaliseSchedule(schedule) {
 }
 
 /**
+ * Returns the configured (base) mode for a profile, ignoring quiet hours.
+ */
+export function scheduledMode(profile) {
+  return normaliseSchedule(profile?.schedule)?.mode ?? 'realtime';
+}
+
+/**
  * Returns the effective delivery mode for a profile right now.
  * 'realtime' → fire immediately
  * 'digest'   → enqueue, flush at digestAt
@@ -124,12 +140,14 @@ export function nextDigestAt(profile, now = Date.now()) {
   const target = parseHHMM(sch.digestAt);
   if (!target) return null;
 
-  // Walk forward in 15-minute steps until we land in the target wall-clock
-  // minute for the profile timezone. This is robust across DST shifts.
+  // Walk forward one minute at a time until we land in the target wall-clock
+  // minute for the profile timezone. This is robust across DST shifts and
+  // cheap because the formatter for each timezone is cached.
+  // Start from the next whole minute so the result is minute-aligned.
   const STEP = 60 * 1000;
-  // Quick path: scan up to 25 hours of minutes.
+  const base = now - (now % STEP);
   for (let i = 1; i <= 25 * 60; i++) {
-    const cand = now + i * STEP;
+    const cand = base + i * STEP;
     const wc = wallClock(cand, sch.timezone);
     if (wc.hour === target.h && wc.minute === target.m) return cand;
   }
