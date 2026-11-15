@@ -34,6 +34,7 @@ function config() {
 
 beforeEach(async () => {
   dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mon-'));
+  process.env.HEALTH_FILE = path.join(dataDir, 'health');
   sent = [];
   feed = [];
   sendOk = () => true;
@@ -47,6 +48,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  delete process.env.HEALTH_FILE;
   __resetState();
   __setTestDeps(null);
   await fs.rm(dataDir, { recursive: true, force: true });
@@ -210,5 +212,29 @@ describe('nextFlushTarget', () => {
   it('otherwise targets the next digestAt', () => {
     assert.strictEqual(nextFlushTarget(profile, Date.parse('2026-11-15T05:00:00Z')), Date.parse('2026-11-15T06:00:00Z'));
     assert.strictEqual(nextFlushTarget(profile, Date.parse('2026-11-15T12:00:00Z')), Date.parse('2026-11-16T06:00:00Z'));
+  });
+});
+
+describe('health file', () => {
+  it('is written after a successful poll (file-based container healthchecks rely on it)', async () => {
+    feed = [deal()];
+    const before = Date.now();
+    await runOnce(config());
+    const stat = await fs.stat(process.env.HEALTH_FILE);
+    assert.ok(stat.mtimeMs >= before - 1000);
+    const written = Number(await fs.readFile(process.env.HEALTH_FILE, 'utf8'));
+    assert.ok(written >= before);
+  });
+
+  it('is not written when every source failed (nothing fetched)', async () => {
+    feed = [];
+    await runOnce(config());
+    await assert.rejects(() => fs.stat(process.env.HEALTH_FILE), { code: 'ENOENT' });
+  });
+
+  it('does not fail the poll if the file cannot be written', async () => {
+    process.env.HEALTH_FILE = path.join(dataDir, 'missing-dir', 'health');
+    feed = [deal()];
+    assert.strictEqual(await runOnce(config()), 1);
   });
 });

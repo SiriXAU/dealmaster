@@ -1,3 +1,4 @@
+import fs from 'fs';
 import { createLogger } from './logger.js';
 import { fetchAllDeals } from './fetcher.js';
 import { filterForProfile } from './filter.js';
@@ -35,8 +36,22 @@ export function getLastPollTime() {
   return lastSuccessfulPoll;
 }
 
+const DEFAULT_HEALTH_FILE = '/tmp/health';
+
+/**
+ * Records a successful poll: updates the timestamp behind GET /health, and
+ * rewrites the health file (default /tmp/health, override with HEALTH_FILE).
+ * Deployments with a file-based container healthcheck read that file's mtime,
+ * so it must keep being written.
+ */
 function touchHealth() {
   lastSuccessfulPoll = Date.now();
+  const file = process.env.HEALTH_FILE || DEFAULT_HEALTH_FILE;
+  try {
+    fs.writeFileSync(file, String(lastSuccessfulPoll));
+  } catch (err) {
+    log.warn(`Could not update health file ${file}: ${err.message}`);
+  }
 }
 
 /**

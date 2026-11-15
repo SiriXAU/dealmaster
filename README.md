@@ -256,6 +256,7 @@ These seed the auto-created `default` filter profile on first run, before any `s
 | `WEB_PASSWORD` | No | _(none)_ | Require HTTP basic auth with this password for the web UI and API |
 | `WEB_TRUSTED_ORIGINS` | No | _(none)_ | Comma-separated extra origins allowed to POST settings (for reverse proxies that rewrite `Host`) |
 | `STARTUP_NOTIFICATION` | No | `true` | Set to `false` to skip the startup liveness notification |
+| `HEALTH_FILE` | No | `/tmp/health` | File rewritten after every successful poll, for file-based container health checks |
 
 `APPRISE_URLS` is required on the **first run only**. Once you've saved settings via the web UI, the container can start without it.
 
@@ -472,6 +473,15 @@ A poll cycle counts as successful when at least one enabled source returned deal
 
 The image has a built-in `HEALTHCHECK` that calls this endpoint, and the example `docker-compose.yml` defines the same check. If the poll loop stalls or every source keeps failing, the container will be marked unhealthy.
 
+Dealmaster also rewrites a **health file** (`/tmp/health` by default, override with `HEALTH_FILE`) after every successful poll, containing the poll timestamp. A health check that doesn't use HTTP can test the file's age instead, for example:
+
+```yaml
+healthcheck:
+  test: ["CMD", "node", "-e", "try{const s=require('fs').statSync('/tmp/health');if(Date.now()-s.mtimeMs>600000)process.exit(1);}catch(e){process.exit(1);}"]
+```
+
+The HTTP check is preferred, because it follows your poll interval automatically (stale after 3× the interval) rather than a fixed age.
+
 ```bash
 # Check health status (replace <container-name> with the actual container name)
 podman inspect --format='{{.State.Health.Status}}' <container-name>
@@ -567,7 +577,7 @@ The default is `info`.
 6. `scheduler.js` decides each profile's effective mode for *now*: realtime, digest, or quiet (quiet wins inside any quiet-hour window). Realtime matches go straight to `notifier.js`; digest/quiet matches go into `digestQueue.js`
 7. `notifier.js` sends notifications — Discord embeds use per-source branding with rate limiting (1s minimum interval, automatic 429 retry); all other URLs use the Apprise CLI, one call per URL. Each destination reports its own result, and failed destinations are retried on the next poll(s), up to 3 attempts. Digest deliveries fold up to 10 deals into a single embed/markdown message
 8. Per-profile digest timers re-arm every poll cycle. They fire either at `digestAt` (in the profile's timezone) or when a quiet-hour window ends, draining the queue into one digest per profile. If a digest profile's `digestAt` falls inside its quiet hours, the digest is sent when the quiet window ends
-9. Newly seen IDs and hashes are written back to disk, a history entry is appended, the deal log is updated with profile-match and queued/notified status, and the health timestamp is updated. All data files are written atomically (temp file + rename) so a crash can't corrupt them
+9. Newly seen IDs and hashes are written back to disk, a history entry is appended, the deal log is updated with profile-match and queued/notified status, and the health timestamp (and `/tmp/health` file) is updated. All data files are written atomically (temp file + rename) so a crash can't corrupt them
 10. When settings are saved via the web UI, `settings.js` validates and writes `settings.json`, the config is rebuilt, and the poll interval restarts with the new settings — no container restart needed
 
 ---
