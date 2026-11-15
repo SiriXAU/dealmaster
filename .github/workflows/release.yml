@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write   # create tags and releases
-      packages: write   # let publish.yml pick up the tag
+      actions: write    # dispatch publish.yml for the versioned image
 
     steps:
       - name: Checkout
@@ -51,3 +51,16 @@ jobs:
             --title "dealmaster ${{ steps.ver.outputs.tag }}" \
             --generate-notes \
             --verify-tag
+
+      # Events created with GITHUB_TOKEN (like the tag push above) don't start
+      # other workflows, so publish.yml's tag trigger never fires on its own.
+      # workflow_dispatch is the documented exception, so trigger it explicitly.
+      - name: Publish versioned container image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run publish.yml \
+            --repo "${{ github.repository }}" \
+            --ref "${{ github.ref_name }}" \
+            -f tag=${{ steps.ver.outputs.tag }}
+          echo "Dispatched publish.yml for ${{ steps.ver.outputs.tag }}"
