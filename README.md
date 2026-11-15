@@ -19,8 +19,8 @@ Dealmaster monitors deal feeds and sends notifications via [Apprise](https://git
 - Polls OzBargain RSS feed and optional gaming sources on a configurable interval
 - **Optional gaming sources** — GamerPower (Giveaways, Games, and Loot as separate JSON API feeds) and EpicBundle (RSS) can each be toggled on/off independently from the web UI or via env vars
 - **Filter profiles** — multiple named profiles, each with its own Apprise URLs, categories, keywords, minimum votes, and schedule. Route gaming deals to one Discord channel and grocery deals to another with no overlap. Legacy single-filter setups auto-migrate to a `default` profile on first load
-- **Quiet hours / digest mode** — per-profile schedule with timezone, quiet windows that queue deals for later, and a configurable daily digest time. Quiet-hour deals are persisted to disk and survive restarts
-- **Cross-source deduplication** — the same deal posted to OzBargain and GamerPower in the same 24h window only notifies once, via a normalised title + price fuzzy hash
+- **Quiet hours / digest mode** — per-profile schedule with timezone, quiet windows that hold deals until the window ends, and a configurable daily digest time. Held deals are persisted to disk and survive restarts
+- **Cross-source deduplication** — the same deal posted to OzBargain and GamerPower in the same 24h window only notifies once, via a normalised title + price fuzzy hash. Duplicates are removed after each profile's filters run, so a copy a profile rejects never hides one it accepts
 - Sends notifications via Apprise to any supported service (Discord, Slack, Telegram, email, and more)
 - Discord URLs receive **rich embeds** — coloured card with source-specific branding, price, store, category, and relevant metadata. Digest deliveries fold up to 10 queued deals into a single embed
 - **Web settings UI** — change any setting live at `http://localhost:8080`, dark mode and mobile-friendly. Profile pill picker, per-profile schedule editor with quiet-hours rows, and profile-match chips on the Recent Deals tab
@@ -38,6 +38,8 @@ Dealmaster monitors deal feeds and sends notifications via [Apprise](https://git
 - Discord webhook rate limiting with `Retry-After` header handling
 - **Structured logging** — timestamped, levelled log output; configurable via `LOG_LEVEL` env var
 - Graceful shutdown on `SIGTERM`/`SIGINT` (plays well with `podman-compose down`) — pending digests are persisted before exit
+- **Atomic data files** — everything in the data volume is written via temp file + rename, so a crash can't leave a corrupt file behind
+- **Runs as a non-root user** inside the container
 - **Test suite** — unit tests across filter, fetcher, config, notifier, store, scheduler, digest queue, settings, monitor, and web modules; `npm test` (runs in CI on every push and pull request)
 
 ---
@@ -62,6 +64,8 @@ services:
       - MIN_VOTES=${MIN_VOTES:-0}
       - MAX_SEEN_DEALS=${MAX_SEEN_DEALS:-500}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # Optional — protect the web UI with a password (recommended on a server)
+      - WEB_PASSWORD=${WEB_PASSWORD:-}
       # Optional gaming sources — remove or set to false to disable
       - GAMERPOWER_ENABLED=${GAMERPOWER_ENABLED:-false}
       - GAMERPOWER_GAMES_ENABLED=${GAMERPOWER_GAMES_ENABLED:-false}
@@ -90,7 +94,9 @@ Then start it:
 podman-compose up -d        # or: docker compose up -d
 ```
 
-On first start, Dealmaster sends a notification for the most recent OzBargain deal so you know it's live, then begins watching for new ones. Open **http://localhost:8080** to configure settings via the web interface.
+On first start, Dealmaster sends a notification for the most recent deal matching your filters so you know it's live, then begins watching for new ones. Open **http://localhost:8080** to configure settings via the web interface.
+
+> **Upgrading from v1.0.3 or earlier:** the container now runs as the unprivileged `node` user. On start-up it takes ownership of the files already in your data volume automatically, so no manual steps are needed.
 
 ---
 
@@ -98,7 +104,7 @@ On first start, Dealmaster sends a notification for the most recent OzBargain de
 
 Dealmaster includes a built-in settings UI served on port 8080 inside the container. Open it in any browser — it works on desktop and mobile, and supports dark mode automatically.
 
-![Settings UI showing notification URLs, category chips, polling and filtering controls](preview.html)
+A static mock-up of the settings page is in [`preview.html`](preview.html) — open it in a browser to see the layout without running the app.
 
 ### What you can configure
 
@@ -109,11 +115,11 @@ The settings page is split into a **profile picker** at the top, a **per-profile
 | Setting | Description |
 |---|---|
 | **Profile name** | Human-readable label (the slug `id` is auto-derived and shown beneath) |
-| **Notification URLs** | Apprise URLs that receive deals matching this profile, one per line |
+| **Notification URLs** | Apprise URLs that receive deals matching this profile, one per line. Saved URLs are shown masked (`discord://••••abcd`); leave a masked line as-is to keep it, or replace it in full to change it |
 | **Categories** | Category chips or comma-separated custom terms |
 | **Keyword Filter** | Only notify for deals whose title, description, or store matches a keyword |
 | **Minimum Votes** | OzBargain vote threshold (gaming sources always pass) |
-| **Schedule** | `Realtime` (fire immediately) / `Digest` (batch at digest time) / `Quiet` (pause delivery), plus timezone, daily digest time, and zero or more quiet-hour windows |
+| **Schedule** | `Realtime` (fire immediately) / `Digest` (batch at digest time) / `Quiet` (hold deals during quiet hours), plus timezone, daily digest time, and zero or more quiet-hour windows |
 
 **Global settings** (apply across all profiles):
 
@@ -141,9 +147,12 @@ The **schedule** card supports three modes:
 |---|---|
 | **Realtime** | Deals fire immediately when matched (default) |
 | **Digest** | Deals queue silently and fire as one consolidated message at the daily `Digest at` time |
-| **Quiet** | Deals queue silently with no scheduled flush — they go out when you flip the profile back to realtime, or when a quiet window ends |
+| **Quiet** | Deals fire immediately outside the profile's quiet-hour windows; inside a window they queue and go out as one digest when it ends. With no quiet windows configured, this behaves like Realtime |
 
-Any quiet window covers all modes — a profile in **Realtime** mode with a `22:00–07:00` quiet window will silently queue overnight deals and flush them as one digest at 07:00.
+Quiet windows apply in every mode:
+
+- A **Realtime** (or **Quiet**) profile with a `22:00–07:00` window queues overnight deals and sends them as one digest at 07:00.
+- A **Digest** profile keeps its daily digest time. If that time falls inside a quiet window (e.g. digest at 06:00, quiet 22:00–07:00), the digest is held and sent when the window ends (07:00) — this also works if the container restarts in between.
 
 ### Recent Deals tab
 
@@ -218,7 +227,10 @@ ssh -L 8080:localhost:8080 your-server
 | `POST` | `/api/settings` | Save new configuration — requires `Content-Type: application/json` and a same-origin request (validated, returns `{error, field}` on failure) |
 | `GET` | `/api/history` | Last 50 notified deals as JSON array |
 | `GET` | `/api/deals` | All deals from the last 24 hours with filter/notify status |
+| `GET` | `/api/deals/count` | `{"count":…,"notified":…}` for the last 24 hours |
 | `GET` | `/health` | Health status — `{"healthy":true,"lastPollMsAgo":…}` (200/503) |
+
+When `WEB_PASSWORD` is set, every endpoint except `/health` requires HTTP basic auth.
 
 ---
 
@@ -260,7 +272,7 @@ These seed the auto-created `default` filter profile on first run, before any `s
 | Pushover | `pover://user@token` |
 | Gotify | `gotify://hostname/token` |
 
-> **Discord tip:** The webhook URL `https://discord.com/api/webhooks/1234/abcd` maps to `discord://1234/abcd`. Discord URLs receive **rich embeds** (coloured card with inline fields and thumbnail) sent directly via the webhook API — identical in appearance to the native Discord bot format. Discord notifications include per-webhook rate limiting (1s minimum interval) and automatic 429 retry handling. All other Apprise URLs receive a plain-text notification via the Apprise CLI.
+> **Discord tip:** The webhook URL `https://discord.com/api/webhooks/1234/abcd` maps to `discord://1234/abcd`. Discord URLs receive **rich embeds** (coloured card with inline fields and thumbnail) sent directly via the webhook API — identical in appearance to the native Discord bot format. Discord notifications include per-webhook rate limiting (1s minimum interval) and automatic 429 retry handling. All other Apprise URLs receive a plain-text notification via the Apprise CLI — one `apprise` call per URL, so each destination succeeds or fails on its own.
 
 See the [Apprise wiki](https://github.com/caronc/apprise/wiki) for all supported services and URL formats.
 
@@ -269,7 +281,9 @@ See the [Apprise wiki](https://github.com/caronc/apprise/wiki) for all supported
 APPRISE_URLS=discord://id/token,slack://TokenA/TokenB/TokenC/Channel
 ```
 
-> **Security note:** Treat your notification URLs as secrets — they grant posting access to your channels. Keep them out of version control — `.env` is in `.gitignore` for this reason.
+If a notification fails, Dealmaster retries it on the next poll(s), up to 3 attempts in total — and only to the destinations that failed, so the ones that already got it don't receive a duplicate. Pending retries are kept in memory, so a restart drops them.
+
+> **Security note:** Treat your notification URLs as secrets — they grant posting access to your channels. Keep them out of version control — `.env` is in `.gitignore` for this reason. URLs can't start with `-` (they'd be read as an Apprise option), and the web API never returns them in full.
 
 ---
 
@@ -384,10 +398,11 @@ Open `http://localhost:8080`, scroll to the **Gaming Sources** card, and toggle 
 - **Categories** — applies to gaming sources using the category field from each feed. Leave blank to receive all.
 - **Keywords** — applies to gaming sources normally; useful for filtering by game name or platform.
 - **Minimum votes** — ignored for gaming sources (they carry no vote data). Set it freely for OzBargain quality control without affecting gaming feeds.
+- **Overlapping feeds** — GamerPower · Giveaways already includes everything in Games and Loot. Enabling them together is safe: a giveaway returned by more than one feed is only sent once.
 
 ### Startup behaviour with gaming sources
 
-On startup, Dealmaster fetches all enabled sources in parallel and seeds their current items as seen — the same way it handles OzBargain. Only one startup notification is sent (the most recent deal across all enabled sources) to avoid flooding your channel.
+On startup, Dealmaster fetches all enabled sources in parallel and seeds their current items as seen — the same way it handles OzBargain. At most one startup notification is sent (see [Startup Behaviour](#startup-behaviour)) to avoid flooding your channel.
 
 The same seeding happens when a source returns deals for the first time later on — for example if it was unreachable at startup, or you enable it in the web UI — so its existing giveaways are never sent as a burst.
 
@@ -400,7 +415,7 @@ On every start Dealmaster:
 1. Loads configuration from `settings.json` (if it exists) or environment variables
 2. Starts the web settings UI
 3. Fetches the current feed from OzBargain and any enabled gaming sources (in parallel)
-4. Sends a notification for the most recent matching deal that hasn't been seen before, as a liveness signal (skipped if every current deal was already seen, or if `STARTUP_NOTIFICATION=false`)
+4. Sends a notification for the most recent deal that matches the **first** profile and hasn't been seen before, as a liveness signal. It's skipped if there's no such deal — which is usual on a restart, since the feed was already seen — or if `STARTUP_NOTIFICATION=false`
 5. Marks all current feed items and their content hashes as seen
 6. Enters the regular poll loop
 
@@ -415,18 +430,22 @@ Five files are stored in `$DATA_DIR` (default `/data`), persisted via the named 
 | File | Purpose |
 |---|---|
 | `settings.json` | Profiles, schedules, and global settings saved via the web UI — takes precedence over env vars on startup |
-| `seen-deals.json` | Deal IDs, content hashes, and fuzzy hashes already notified — prevents duplicates across restarts |
+| `seen-deals.json` | IDs, content hashes, and fuzzy hashes of every deal already fetched (notified or not) — prevents duplicates across restarts |
 | `history.json` | Last 50 notified deals with titles, links, sources, and timestamps |
 | `deal-log.json` | All deals from the last 24 hours — notified, queued, and filtered — for the Recent Deals web UI tab |
-| `pending-digest.json` | Per-profile queue of deals waiting for the next digest delivery — flushed on `digestAt`, on quiet-window end, or on graceful shutdown |
+| `pending-digest.json` | Per-profile queue of deals waiting for the next digest delivery — sent at `digestAt` or when a quiet window ends, and saved to disk on graceful shutdown so nothing is lost across restarts |
 
-The seen-deal store is capped at `MAX_SEEN_DEALS` entries (default: `500`). When the cap is reached, the oldest entries are trimmed. With a 2-minute poll interval and typical OzBargain posting volume this is more than enough to prevent duplicates indefinitely.
+All files are written atomically (temp file + rename), so a crash or full disk mid-write leaves the previous version intact.
 
-Three layers of deduplication run on every poll cycle:
+The seen-deal store is capped at `MAX_SEEN_DEALS` entries (default: `500`). When the cap is reached, the entries seen least recently are trimmed first — deals still in a feed keep being refreshed, so they aren't evicted. With a 2-minute poll interval and typical OzBargain posting volume this is more than enough to prevent duplicates indefinitely. If you enable all gaming sources, consider raising it (e.g. `1000`), since GamerPower alone can list 100+ live giveaways.
+
+Three layers of deduplication run on every poll cycle, both against earlier polls and within the current one:
 
 1. **Exact ID** — the feed's GUID/link
 2. **Content hash** — SHA-256 of `title + link + price`, catches the same deal reposted with a fresh GUID within a 24h window
 3. **Fuzzy hash** — SHA-256 of normalised title (lowercased, punctuation stripped, whitespace collapsed) + price, catches the same deal cross-posted from OzBargain and GamerPower
+
+Within a poll, duplicates are removed per profile *after* that profile's filters run. That way an OzBargain post below a profile's minimum votes can't hide the same giveaway arriving from GamerPower (which ignores the vote threshold).
 
 **Resetting seen deals** (to re-notify on all current deals):
 ```bash
@@ -436,6 +455,8 @@ podman-compose up -d
 ```
 
 > The volume name is prefixed with the name of the directory containing your `docker-compose.yml`. For example, if your directory is `~/dealmaster`, the volume will be named `dealmaster_dealmaster-data`.
+
+**File ownership:** the app runs as the `node` user (UID 1000). The container's entrypoint starts as root only long enough to `chown` the data directory, then drops privileges — so existing volumes and bind mounts work without changes. If you run the container with `--user`, make sure that user can write to the data directory.
 
 ---
 
@@ -447,9 +468,9 @@ Dealmaster exposes a `GET /health` HTTP endpoint that returns the health status:
 {"healthy":true,"lastPollMsAgo":45000,"pollIntervalMs":120000}
 ```
 
-A poll cycle is considered healthy if it completed within 3× the configured poll interval. The status code is `200` when healthy and `503` when stale.
+A poll cycle counts as successful when at least one enabled source returned deals. The service is healthy if the last successful cycle was within 3× the configured poll interval. The status code is `200` when healthy and `503` when stale. This endpoint never requires a password.
 
-The health check defined in `docker-compose.yml` calls this endpoint. If the poll loop stalls or crashes, the container will be marked unhealthy.
+The image has a built-in `HEALTHCHECK` that calls this endpoint, and the example `docker-compose.yml` defines the same check. If the poll loop stalls or every source keeps failing, the container will be marked unhealthy.
 
 ```bash
 # Check health status (replace <container-name> with the actual container name)
@@ -469,17 +490,17 @@ Log output includes an ISO timestamp, severity level, and module name:
 
 ```
 2026-05-03T10:30:00.000Z [INFO] [monitor] Poll loop started (interval: 120s)
-2026-05-03T10:30:00.000Z [WARN] [fetcher] Retry 1/3 for epicbundle in 1000ms (HTTP 503)
+2026-05-03T10:30:00.000Z [WARN] [fetcher] Retry 1/3 for epicbundle in 1000ms (Status code 503)
 ```
 
 Set `LOG_LEVEL` to control verbosity:
 
 | Level | Shows |
 |---|---|
-| `debug` | Everything including retry attempts and detailed fetch info |
-| `info` | Startup banner, poll cycles, new deal notifications, settings saves |
-| `warn` | Transient errors, retries, rate limits |
-| `error` | Fatal errors only |
+| `debug` | Everything (currently the same as `info`) |
+| `info` | Startup banner, poll loop, notifications sent, digest flushes, source seeding, settings saves |
+| `warn` | Transient errors, fetch retries, rate limits, digest queue overflow |
+| `error` | Failed fetches and notifications, giving up on a retry, unreadable settings |
 
 The default is `info`.
 
@@ -501,10 +522,12 @@ The default is `info`.
                       │   fetch → for each profile:  │
                       │     filterForProfile         │
                       │     dedupe (id + hash + fuz) │
+                      │     skip already-seen        │
                       │     mode = realtime|digest|  │
                       │            quiet             │
                       │       realtime → notify      │
                       │       digest/quiet → enqueue │
+                      │   retry failed destinations  │
                       │   schedule digest timers     │
                       └─┬───────────┬────────────┬───┘
                         │           │            │
@@ -537,12 +560,12 @@ The default is `info`.
 ```
 
 1. `index.js` loads `settings.json` (if present), migrates any legacy single-filter shape into a `default` profile, builds config, starts the web UI, registers shutdown handlers (which persist `pending-digest.json`), and calls `startMonitor()`
-2. On startup, `monitor.js` fetches all enabled sources, sends a startup notification for the most recent deal that matches the first profile, seeds all items and content/fuzzy hashes as seen, then starts the poll loop (each poll is scheduled only after the previous one finishes) and the per-profile digest timers
-3. On each poll, `fetcher.js` calls `fetchAllDeals(config)` which fetches OzBargain plus any enabled gaming sources **in parallel**, normalising each item into a consistent deal shape, then removes duplicates within the batch (same id, same content, or the same deal on two sources). Failed fetches are retried with exponential backoff (up to 3 retries). GamerPower is fetched via their JSON API; EpicBundle uses RSS
-4. For **each profile**, `filter.js` runs `filterForProfile(deals, profile)` against the profile's own category whitelist, keyword list, and minimum-vote threshold (the threshold only applies to OzBargain deals)
-5. `store.js` filters out already-seen deals using three layers: exact GUID/link, content hash (`title+link+price`), and fuzzy hash (normalised title + price). The fuzzy layer collapses cross-source duplicates within the 24h window
+2. On startup, `monitor.js` fetches all enabled sources, sends a startup notification for the most recent unseen deal that matches the first profile, seeds all items and content/fuzzy hashes as seen, then starts the poll loop (each poll is scheduled only after the previous one finishes, and polls never overlap with digest sends) and the per-profile digest timers
+3. On each poll, `fetcher.js` calls `fetchAllDeals(config)` which fetches OzBargain plus any enabled gaming sources **in parallel**, normalising each item into a consistent deal shape. Failed fetches (5xx, 429, timeouts, network errors) are retried with exponential backoff (up to 3 retries). GamerPower is fetched via their JSON API; EpicBundle uses RSS. A source returning deals for the first time is seeded silently instead of notifying
+4. For **each profile**, `filter.js` runs `filterForProfile(deals, profile)` against the profile's own category whitelist, keyword list, and minimum-vote threshold (the threshold only applies to OzBargain deals). The profile's matches are then de-duplicated among themselves (same id, same content, or the same deal on two sources)
+5. Matches that were already seen are skipped, using the three layers stored by `store.js`: exact GUID/link, content hash (`title+link+price`), and fuzzy hash (normalised title + price). The fuzzy layer collapses cross-source duplicates within the 24h window
 6. `scheduler.js` decides each profile's effective mode for *now*: realtime, digest, or quiet (quiet wins inside any quiet-hour window). Realtime matches go straight to `notifier.js`; digest/quiet matches go into `digestQueue.js`
-7. `notifier.js` sends notifications — Discord embeds use per-source branding with rate limiting (1s minimum interval, automatic 429 retry); all other URLs use the Apprise CLI. Digest deliveries fold up to 10 deals into a single embed/markdown message
+7. `notifier.js` sends notifications — Discord embeds use per-source branding with rate limiting (1s minimum interval, automatic 429 retry); all other URLs use the Apprise CLI, one call per URL. Each destination reports its own result, and failed destinations are retried on the next poll(s), up to 3 attempts. Digest deliveries fold up to 10 deals into a single embed/markdown message
 8. Per-profile digest timers re-arm every poll cycle. They fire either at `digestAt` (in the profile's timezone) or when a quiet-hour window ends, draining the queue into one digest per profile. If a digest profile's `digestAt` falls inside its quiet hours, the digest is sent when the quiet window ends
 9. Newly seen IDs and hashes are written back to disk, a history entry is appended, the deal log is updated with profile-match and queued/notified status, and the health timestamp is updated. All data files are written atomically (temp file + rename) so a crash can't corrupt them
 10. When settings are saved via the web UI, `settings.js` validates and writes `settings.json`, the config is rebuilt, and the poll interval restarts with the new settings — no container restart needed
@@ -582,6 +605,12 @@ dealmaster/
 │   └── web.test.js         # Web API: masking, CSRF, auth, validation
 ├── public/
 │   └── index.html          # Web settings UI
+├── .github/workflows/
+│   ├── test.yml            # Runs npm test on Node 18 + 22 for every push to main and every PR
+│   ├── bump-version.yml    # Manual: bump version and open a release PR
+│   ├── release.yml         # Tags + GitHub Release when a release PR merges
+│   └── publish.yml         # Builds and pushes the container image to GHCR
+├── preview.html            # Static mock-up of the settings UI
 ├── Dockerfile              # node:22-alpine image with Python3 + apprise; runs as the `node` user
 ├── docker-entrypoint.sh    # Fixes /data ownership, then drops root privileges
 ├── docker-compose.yml      # Compose definition with HTTP healthcheck and web port
@@ -598,17 +627,17 @@ dealmaster/
 # Install dependencies
 npm install
 
-# Run tests (83 tests across 8 suites)
+# Run the test suite (no network access or apprise install needed)
 npm test
 
-# Run the app locally (needs APPRISE_URLS set)
-APPRISE_URLS=discord://id/token node index.js
+# Run the app locally (needs APPRISE_URLS set; DATA_DIR defaults to /data)
+DATA_DIR=./data APPRISE_URLS=discord://id/token node index.js
 
 # Run with debug logging
-LOG_LEVEL=debug APPRISE_URLS=discord://id/token node index.js
+LOG_LEVEL=debug DATA_DIR=./data APPRISE_URLS=discord://id/token node index.js
 ```
 
-Node.js >= 18 is required.
+Node.js >= 18 is required. Non-Discord notification URLs also need the [Apprise CLI](https://github.com/caronc/apprise) on your `PATH` (`pip install apprise`); the container image includes it.
 
 ---
 
