@@ -29,7 +29,7 @@ let _activeQueue = null;        // Map<profileId, Array<{deal, queuedAt}>>
 let _activeConfig = null;       // last config we polled with
 let _lastMode = new Map();      // profileId → 'realtime'|'digest'|'quiet' (previous cycle)
 let _seededSources = new Set(); // sources whose current feed contents are already marked seen
-let _retries = new Map();       // profileId → Array<{ deal, attempts }>
+let _retries = new Map();       // profileId → Array<{ deal, attempts, urls, deliveredBefore }>
 
 export function getLastPollTime() {
   return lastSuccessfulPoll;
@@ -203,14 +203,28 @@ export function dedupeBatch(deals) {
   return out;
 }
 
-function addRetry(profileId, deal, attempts) {
+/** Queues a retry of `deal` to just the destinations (`urls`) that failed. */
+function addRetry(profileId, deal, attempts, urls, deliveredBefore) {
   if (attempts >= MAX_SEND_ATTEMPTS) {
-    log.error(`Giving up on "${deal.title}" for profile "${profileId}" after ${attempts} failed attempt(s)`);
+    log.error(`Giving up on "${deal.title}" for profile "${profileId}" (${urls.length} destination(s)) after ${attempts} failed attempt(s)`);
     return;
   }
   const list = _retries.get(profileId) ?? [];
-  list.push({ deal, attempts });
+  list.push({ deal, attempts, urls, deliveredBefore });
   _retries.set(profileId, list);
+}
+
+/**
+ * Returns the configured URLs whose delivery failed. Falls back to every URL
+ * that was attempted when the notifier gave no per-target results.
+ */
+function failedTargets(attempted, result) {
+  if (!result) return attempted;
+  if (!Array.isArray(result.results) || result.results.length === 0) {
+    return result.ok ? [] : attempted;
+  }
+  const failed = new Set(result.results.filter(r => !r.ok).map(r => r.target ?? r.url));
+  return attempted.filter(u => failed.has(u));
 }
 
 /**
@@ -263,10 +277,16 @@ async function runOnceUnlocked(config) {
   for (const [profileId, list] of pendingRetries) {
     const profile = profileById.get(profileId);
     if (!profile) continue;
-    for (const { deal, attempts } of list) {
+    for (const { deal, attempts, urls, deliveredBefore } of list) {
+      // Only retry destinations that are still configured on the profile.
+      const stillConfigured = (urls ?? profile.appriseUrls).filter(u => profile.appriseUrls.includes(u));
+      if (stillConfigured.length === 0) continue;
       if (currentMode(profile, now) === 'realtime') {
-        realtimeSends.push({ deal, profile, attempts });
+        realtimeSends.push({ deal, profile, attempts, urls: stillConfigured, deliveredBefore });
       } else {
+        // The profile has gone quiet/digest. Its digest goes to every URL, so
+        // this re-delivers to destinations that already got the realtime post;
+        // a missed deal is worse than a repeat inside a digest.
         enqueue(queue, profile.id, deal, now);
       }
     }
@@ -289,7 +309,7 @@ async function runOnceUnlocked(config) {
       profileMatches.set(deal.id, list);
 
       if (mode === 'realtime') {
-        realtimeSends.push({ deal, profile, attempts: 0 });
+        realtimeSends.push({ deal, profile, attempts: 0, urls: profile.appriseUrls, deliveredBefore: false });
       } else {
         enqueue(queue, profile.id, deal, now);
         queuedIds.add(deal.id);
@@ -297,25 +317,33 @@ async function runOnceUnlocked(config) {
     }
   }
 
-  // Step 3: realtime delivery, sequential with inter-post delay. Failures are
-  // retried on the next poll(s) for that profile only.
+  // Step 3: realtime delivery, sequential with inter-post delay. Destinations
+  // that fail are retried on the next poll(s) — only those destinations, so
+  // ones that already received the deal don't get it twice.
   let notified = 0;
   const historyBatch = [];
   for (let i = 0; i < realtimeSends.length; i++) {
-    const { deal, profile, attempts } = realtimeSends[i];
-    let ok = false;
+    const { deal, profile, attempts, urls, deliveredBefore } = realtimeSends[i];
+    let result = null;
     try {
-      ({ ok } = await deps.sendDealNotification(deal, profile.appriseUrls));
+      result = await deps.sendDealNotification(deal, urls);
     } catch (err) {
       log.error(`Notification error for "${deal.title}": ${err.message}`);
     }
-    if (ok) {
-      notified++;
+    const failed = failedTargets(urls, result);
+    const delivered = urls.length - failed.length;
+    if (delivered > 0) {
       notifiedIds.add(deal.id);
-      historyBatch.push(deal);
-      log.info(`Notified [${profile.id}]: ${deal.title} [${deal.category}] (+${deal.votes})`);
-    } else {
-      addRetry(profile.id, deal, attempts + 1);
+      if (!deliveredBefore) {
+        // Count/record a deal once, the first time it reaches any destination.
+        notified++;
+        historyBatch.push(deal);
+      }
+      log.info(`Notified [${profile.id}]: ${deal.title} [${deal.category}] (+${deal.votes})` +
+        (failed.length > 0 ? ` — ${failed.length} of ${urls.length} destination(s) failed, will retry` : ''));
+    }
+    if (failed.length > 0) {
+      addRetry(profile.id, deal, attempts + 1, failed, deliveredBefore || delivered > 0);
     }
     if (i < realtimeSends.length - 1) {
       await deps.sleep(INTER_POST_DELAY_MS);

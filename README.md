@@ -33,7 +33,7 @@ Dealmaster monitors deal feeds and sends notifications via [Apprise](https://git
 - **Recent Deals tab** — web UI tab showing all deals (notified, queued for digest, and filtered) from the last 24 hours with profile-match chips and filter reasons
 - **Health endpoint** — `GET /health` returns JSON health status (200/503) based on poll cycle freshness
 - Retry logic with exponential backoff on feed fetch failures (5xx, 429, timeouts, network errors); all outbound requests have timeouts
-- Failed realtime notifications are retried on the next polls (up to 3 attempts) instead of being dropped
+- Failed realtime notifications are retried on the next polls (up to 3 attempts) instead of being dropped — only to the destinations that failed, so the ones that succeeded don't get duplicates
 - **Optional password protection** for the web UI (`WEB_PASSWORD`), CSRF protection on the settings API, and notification URLs are never returned in full by the API
 - Discord webhook rate limiting with `Retry-After` header handling
 - **Structured logging** — timestamped, levelled log output; configurable via `LOG_LEVEL` env var

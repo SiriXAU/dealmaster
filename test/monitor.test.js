@@ -117,6 +117,50 @@ describe('runOnce', () => {
     assert.deepStrictEqual(sent, ['ozb-1', 'ozb-1']);
   });
 
+  it('retries only the destinations that failed', async () => {
+    const cfg = config();
+    cfg.profiles[0].appriseUrls = ['discord://1/good', 'discord://2/bad'];
+    const calls = [];
+    let badUp = false;
+    __setTestDeps({
+      fetchAllDeals: async () => feed,
+      sendDealNotification: async (d, urls) => {
+        calls.push([...urls]);
+        const results = urls.map(u => ({ target: u, ok: u.includes('good') || badUp }));
+        return { ok: results.every(r => r.ok), results };
+      },
+      sleep: async () => {},
+    });
+    feed = [deal()];
+    assert.strictEqual(await runOnce(cfg), 1, 'a partial success still counts as notified');
+    badUp = true;
+    await runOnce(cfg);
+    await runOnce(cfg);
+    assert.deepStrictEqual(calls, [['discord://1/good', 'discord://2/bad'], ['discord://2/bad']]);
+    const history = JSON.parse(await fs.readFile(path.join(dataDir, 'history.json'), 'utf8'));
+    assert.strictEqual(history.length, 1, 'the retry must not add a second history entry');
+  });
+
+  it('drops retry targets that were removed from the profile', async () => {
+    const cfg = config();
+    cfg.profiles[0].appriseUrls = ['discord://1/good', 'discord://2/bad'];
+    const calls = [];
+    __setTestDeps({
+      fetchAllDeals: async () => feed,
+      sendDealNotification: async (d, urls) => {
+        calls.push([...urls]);
+        const results = urls.map(u => ({ target: u, ok: u.includes('good') }));
+        return { ok: results.every(r => r.ok), results };
+      },
+      sleep: async () => {},
+    });
+    feed = [deal()];
+    await runOnce(cfg);
+    cfg.profiles[0].appriseUrls = ['discord://1/good'];
+    await runOnce(cfg);
+    assert.deepStrictEqual(calls, [['discord://1/good', 'discord://2/bad']]);
+  });
+
   it(`gives up after ${MAX_SEND_ATTEMPTS} failed attempts`, async () => {
     feed = [deal()];
     sendOk = () => false;
