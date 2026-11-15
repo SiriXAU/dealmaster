@@ -56,6 +56,11 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          # The default `latest=auto` adds :latest to every semver build, which
+          # would let a backfill of an old tag move :latest. :latest is set only
+          # by the explicit rule below.
+          flavor: |
+            latest=false
           # Branch pushes publish :main and :latest. Tag builds publish
           # :X.Y.Z and :X.Y only — a dispatched run of an older tag must never
           # move :latest or :main.
