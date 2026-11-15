@@ -43,6 +43,9 @@ function getBrand(source) {
 
 const _lastDiscordSend = new Map();
 
+const DISCORD_TIMEOUT_MS = 15_000;
+const APPRISE_TIMEOUT_MS = 60_000;
+
 /**
  * Sends a notification for a single deal to the given Apprise URLs.
  * Discord URLs (discord://id/token) receive a rich embed via the webhook API.
@@ -73,34 +76,28 @@ export async function sendDigest(deals, urls, profileName) {
   );
 }
 
+/**
+ * Sends to every target in parallel and reports one result per configured URL.
+ * Each result's `target` is the URL exactly as configured, so callers can retry
+ * just the destinations that failed. Apprise URLs are sent one per CLI call for
+ * the same reason — a single batched call can only report success or failure
+ * for all of them together.
+ *
+ * @returns {Promise<{ ok: boolean, results: Array<{ target: string, url: string, ok: boolean }> }>}
+ */
 async function dispatch(urls, sendDiscord, sendApprise) {
-  const discordUrls = [];
-  const appriseUrls = [];
-
-  for (const url of urls) {
-    const webhookUrl = parseDiscordUrl(url);
-    if (webhookUrl) {
-      discordUrls.push(webhookUrl);
-    } else {
-      appriseUrls.push(url);
+  const results = await Promise.all(urls.map(async target => {
+    const webhookUrl = parseDiscordUrl(target);
+    let ok = false;
+    try {
+      ok = webhookUrl ? await sendDiscord(webhookUrl) : await sendApprise([target]);
+    } catch (err) {
+      log.error(`Notification to a ${webhookUrl ? 'Discord' : 'Apprise'} target failed: ${err.message}`);
     }
-  }
+    return { target, url: webhookUrl ?? target, ok: Boolean(ok) };
+  }));
 
-  const discordResults = await Promise.all(
-    discordUrls.map(async webhookUrl => ({
-      url: webhookUrl,
-      ok:  await sendDiscord(webhookUrl),
-    }))
-  );
-
-  const appriseOk = appriseUrls.length > 0 ? await sendApprise(appriseUrls) : true;
-
-  const allResults = [
-    ...discordResults,
-    ...appriseUrls.map(u => ({ url: u, ok: appriseOk })),
-  ];
-
-  return { ok: allResults.every(r => r.ok), results: allResults };
+  return { ok: results.every(r => r.ok), results };
 }
 
 /**
@@ -126,6 +123,7 @@ async function postDiscord(webhookUrl, payload) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(DISCORD_TIMEOUT_MS),
       });
       if (res.ok) return true;
       if (res.status === 429) {
@@ -311,10 +309,12 @@ function runApprise(title, body, urls) {
   return new Promise(resolve => {
     execFile(
       'apprise',
-      ['--title', title, '--body', body, ...urls],
+      // "--" ends option parsing so a URL can never be read as an apprise flag.
+      ['--title', title, '--body', body, '--', ...urls],
+      { timeout: APPRISE_TIMEOUT_MS },
       (err, _stdout, stderr) => {
         if (err) {
-          log.error(`Apprise exited with code ${err.code}: ${stderr}`);
+          log.error(`Apprise failed (${err.killed ? 'timed out' : `exit code ${err.code}`}): ${stderr}`);
           resolve(false);
         } else {
           resolve(true);

@@ -1,18 +1,30 @@
-import fs from 'node:fs';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parseHHMM, validateTimezone } from './scheduler.js';
+import { writeFileAtomic } from './fsUtil.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('settings');
 
 const FILE = 'settings.json';
-const TMP  = 'settings.tmp.json';
 
 const PROFILE_ID_RE = /^[a-z0-9-]{1,32}$/;
+const SCHEDULE_MODES = ['realtime', 'digest', 'quiet'];
+const GAMING_SOURCE_KEYS = ['gamerpower', 'gamerpowerGames', 'gamerpowerLoot', 'epicbundle'];
 
 export async function loadSettings(dataDir) {
+  const filePath = path.join(dataDir, FILE);
+  let raw;
   try {
-    const raw = fs.readFileSync(path.join(dataDir, FILE), 'utf8');
-    const parsed = JSON.parse(raw);
-    return migrateLegacySettings(parsed);
-  } catch {
+    raw = await fs.readFile(filePath, 'utf8');
+  } catch (err) {
+    if (err.code !== 'ENOENT') log.error(`Could not read ${filePath}: ${err.message}`);
+    return null;
+  }
+  try {
+    return migrateLegacySettings(JSON.parse(raw));
+  } catch (err) {
+    log.error(`${filePath} is not valid JSON (${err.message}) — falling back to environment variables`);
     return null;
   }
 }
@@ -35,14 +47,13 @@ export function migrateLegacySettings(s) {
     schedule:    defaultSchedule(),
   };
 
-  const migrated = {
+  return {
     profiles:            [profile],
     pollIntervalSeconds: s.pollIntervalSeconds,
     maxSeenDeals:        s.maxSeenDeals,
     gamingSources:       s.gamingSources,
     savedAt:             s.savedAt,
   };
-  return migrated;
 }
 
 export function defaultSchedule() {
@@ -54,31 +65,58 @@ export function defaultSchedule() {
   };
 }
 
+function fail(message, field) {
+  const e = new Error(message);
+  e.field = field;
+  throw e;
+}
+
+function validateStringList(list, profileId, name) {
+  if (list == null) return [];
+  if (!Array.isArray(list)) fail(`Profile "${profileId}" ${name} must be an array`, `profiles.${name}`);
+  for (const v of list) {
+    if (typeof v !== 'string') fail(`Profile "${profileId}" ${name} must be strings`, `profiles.${name}`);
+  }
+  return list.map(v => v.trim()).filter(Boolean);
+}
+
 function validateSchedule(sch, profileId) {
   if (sch == null) return defaultSchedule();
   if (typeof sch !== 'object' || Array.isArray(sch)) {
-    const e = new Error(`Profile "${profileId}" schedule must be an object`);
-    e.field = 'schedule';
-    throw e;
+    fail(`Profile "${profileId}" schedule must be an object`, 'profiles.schedule');
   }
-  const timezone = validateTimezone(sch.timezone) ?? 'UTC';
-  const mode = ['realtime', 'digest', 'quiet'].includes(sch.mode) ? sch.mode : 'realtime';
+
+  let timezone = 'UTC';
+  if (sch.timezone != null && sch.timezone !== '') {
+    timezone = validateTimezone(sch.timezone);
+    if (!timezone) fail(`Profile "${profileId}" timezone is invalid`, 'profiles.schedule.timezone');
+  }
+
+  let mode = 'realtime';
+  if (sch.mode != null) {
+    if (!SCHEDULE_MODES.includes(sch.mode)) {
+      fail(`Profile "${profileId}" schedule.mode must be realtime/digest/quiet`, 'profiles.schedule.mode');
+    }
+    mode = sch.mode;
+  }
+
   const quietHours = [];
-  if (Array.isArray(sch.quietHours)) {
+  if (sch.quietHours != null) {
+    if (!Array.isArray(sch.quietHours)) {
+      fail(`Profile "${profileId}" quietHours must be an array`, 'profiles.schedule.quietHours');
+    }
     for (const w of sch.quietHours) {
       if (!w || !parseHHMM(w.from) || !parseHHMM(w.to)) {
-        const e = new Error(`Profile "${profileId}" quiet hours must use HH:mm format`);
-        e.field = 'schedule.quietHours';
-        throw e;
+        fail(`Profile "${profileId}" quiet hours must use HH:mm format`, 'profiles.schedule.quietHours');
       }
       quietHours.push({ from: w.from, to: w.to });
     }
   }
+
   if (sch.digestAt != null && !parseHHMM(sch.digestAt)) {
-    const e = new Error(`Profile "${profileId}" digestAt must use HH:mm format`);
-    e.field = 'schedule.digestAt';
-    throw e;
+    fail(`Profile "${profileId}" digestAt must use HH:mm format`, 'profiles.schedule.digestAt');
   }
+
   return {
     timezone,
     mode,
@@ -88,59 +126,74 @@ function validateSchedule(sch, profileId) {
 }
 
 function validateProfile(p, seenIds) {
-  if (!p || typeof p !== 'object') {
-    const e = new Error('Profile must be an object');
-    e.field = 'profiles';
-    throw e;
-  }
+  if (!p || typeof p !== 'object') fail('Profile must be an object', 'profiles');
+
   const id = String(p.id ?? '').trim();
   if (!PROFILE_ID_RE.test(id)) {
-    const e = new Error('Profile id must be 1–32 lowercase alphanumeric or hyphen characters');
-    e.field = 'profiles.id';
-    throw e;
+    fail('Profile id must be 1–32 lowercase alphanumeric or hyphen characters', 'profiles.id');
   }
-  if (seenIds.has(id)) {
-    const e = new Error(`Profile id "${id}" is duplicated`);
-    e.field = 'profiles.id';
-    throw e;
-  }
+  if (seenIds.has(id)) fail(`Profile id "${id}" is duplicated`, 'profiles.id');
   seenIds.add(id);
 
-  const urls = Array.isArray(p.appriseUrls) ? p.appriseUrls.map(u => String(u).trim()).filter(Boolean) : [];
-  if (urls.length === 0) {
-    const e = new Error(`Profile "${id}" needs at least one notification URL`);
-    e.field = 'profiles.appriseUrls';
-    throw e;
+  if (p.appriseUrls != null && !Array.isArray(p.appriseUrls)) {
+    fail(`Profile "${id}" appriseUrls must be an array`, 'profiles.appriseUrls');
   }
+  const urls = [];
+  for (const u of p.appriseUrls ?? []) {
+    if (typeof u !== 'string') fail(`Profile "${id}" notification URLs must be strings`, 'profiles.appriseUrls');
+    const trimmed = u.trim();
+    if (!trimmed) continue;
+    // A leading dash would be parsed by the apprise CLI as an option
+    // (e.g. --attach=/some/file), so never accept one as a URL.
+    if (trimmed.startsWith('-')) {
+      fail(`Profile "${id}" notification URL must not start with "-"`, 'profiles.appriseUrls');
+    }
+    urls.push(trimmed);
+  }
+  if (urls.length === 0) fail(`Profile "${id}" needs at least one notification URL`, 'profiles.appriseUrls');
 
-  const minVotes = Number(p.minVotes);
+  const minVotes = Number(p.minVotes ?? 0);
   if (!Number.isInteger(minVotes) || minVotes < 0) {
-    const e = new Error(`Profile "${id}" minVotes must be a whole number ≥ 0`);
-    e.field = 'profiles.minVotes';
-    throw e;
+    fail(`Profile "${id}" minVotes must be a whole number ≥ 0`, 'profiles.minVotes');
   }
 
   return {
     id,
     name:        String(p.name ?? id).slice(0, 64),
     appriseUrls: urls,
-    categories:  Array.isArray(p.categories) ? p.categories.map(c => String(c).trim()).filter(Boolean) : [],
-    keywords:    Array.isArray(p.keywords)   ? p.keywords.map(k => String(k).trim()).filter(Boolean)   : [],
+    categories:  validateStringList(p.categories, id, 'categories'),
+    keywords:    validateStringList(p.keywords,   id, 'keywords'),
     minVotes,
     schedule:    validateSchedule(p.schedule, id),
   };
 }
 
-function validate(s) {
-  // Either accept new shape (profiles[]) or auto-migrate a legacy payload.
+function validateGamingSources(gs) {
+  if (gs == null) return Object.fromEntries(GAMING_SOURCE_KEYS.map(k => [k, false]));
+  if (typeof gs !== 'object' || Array.isArray(gs)) fail('gamingSources must be an object', 'gamingSources');
+  for (const [key, val] of Object.entries(gs)) {
+    if (typeof val !== 'boolean') fail(`gamingSources.${key} must be a boolean`, 'gamingSources');
+  }
+  return Object.fromEntries(GAMING_SOURCE_KEYS.map(k => [k, Boolean(gs[k])]));
+}
+
+/**
+ * Validates and normalises a settings payload (new or legacy shape).
+ * This is the single source of truth for settings validation — both the web
+ * API and saveSettings go through it.
+ *
+ * @returns normalised settings (without savedAt)
+ * @throws Error with a `.field` property on invalid input
+ */
+export function normaliseSettings(s) {
+  if (s == null || typeof s !== 'object' || Array.isArray(s)) fail('Request body must be a JSON object', null);
+
   const migrated = (Array.isArray(s.profiles) && s.profiles.length > 0)
     ? s
     : migrateLegacySettings(s);
 
   if (!Array.isArray(migrated.profiles) || migrated.profiles.length === 0) {
-    const e = new Error('At least one profile is required.');
-    e.field = 'profiles';
-    throw e;
+    fail('At least one profile is required.', 'profiles');
   }
 
   const seenIds = new Set();
@@ -148,43 +201,27 @@ function validate(s) {
 
   const interval = Number(migrated.pollIntervalSeconds ?? 120);
   if (!Number.isInteger(interval) || interval < 30) {
-    const e = new Error('Poll interval must be a whole number ≥ 30.');
-    e.field = 'pollIntervalSeconds';
-    throw e;
+    fail('Poll interval must be a whole number ≥ 30.', 'pollIntervalSeconds');
   }
 
   const maxSeen = Number(migrated.maxSeenDeals ?? 500);
   if (!Number.isInteger(maxSeen) || maxSeen < 1) {
-    const e = new Error('Max seen deals must be a whole number ≥ 1.');
-    e.field = 'maxSeenDeals';
-    throw e;
+    fail('Max seen deals must be a whole number ≥ 1.', 'maxSeenDeals');
   }
 
-  return { migrated, profiles, interval, maxSeen };
-}
-
-export async function saveSettings(dataDir, settings) {
-  const { profiles, interval, maxSeen } = validate(settings);
-
-  const gs = settings.gamingSources ?? {};
-  const payload = {
+  return {
     profiles,
     pollIntervalSeconds: interval,
     maxSeenDeals:        maxSeen,
-    gamingSources: {
-      gamerpower:      Boolean(gs.gamerpower),
-      gamerpowerGames: Boolean(gs.gamerpowerGames),
-      gamerpowerLoot:  Boolean(gs.gamerpowerLoot),
-      epicbundle:      Boolean(gs.epicbundle),
-    },
-    savedAt:             new Date().toISOString(),
+    gamingSources:       validateGamingSources(migrated.gamingSources),
   };
+}
 
-  fs.mkdirSync(dataDir, { recursive: true });
-  const tmpPath   = path.join(dataDir, TMP);
-  const finalPath = path.join(dataDir, FILE);
-  fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2));
-  fs.renameSync(tmpPath, finalPath);
-
+export async function saveSettings(dataDir, settings) {
+  const payload = {
+    ...normaliseSettings(settings),
+    savedAt: new Date().toISOString(),
+  };
+  await writeFileAtomic(path.join(dataDir, FILE), JSON.stringify(payload, null, 2));
   return payload;
 }

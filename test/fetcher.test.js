@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { normalizeOzbItem, normalizeGamerPowerItem } from '../src/fetcher.js';
+import { normalizeOzbItem, normalizeGamerPowerItem, isRetryableError, stripHtml } from '../src/fetcher.js';
 
 describe('normalizeOzbItem', () => {
   function makeItem(overrides = {}) {
@@ -98,5 +98,46 @@ describe('normalizeGamerPowerItem', () => {
   it('uses real end_date', () => {
     const r = normalizeGamerPowerItem(makeItem({ end_date: '2026-06-01' }), 'gamerpower');
     assert.strictEqual(r.expiry, '2026-06-01');
+  });
+});
+
+describe('normalizeOzbItem vote attributes', () => {
+  it('reads OzBargain votes-pos', () => {
+    const r = normalizeOzbItem({
+      guid: 'g', title: 'X $1 @ Y', link: 'l', categories: ['Computing'],
+      ozbMeta: { $: { 'votes-pos': '42', 'votes-neg': '3', expiry: '2026-12-01' } },
+    });
+    assert.strictEqual(r.votes, 42);
+    assert.strictEqual(r.expiry, '2026-12-01');
+  });
+});
+
+describe('isRetryableError', () => {
+  it('retries rss-parser status and timeout errors', () => {
+    assert.ok(isRetryableError(new Error('Status code 503')));
+    assert.ok(isRetryableError(new Error('Status code 429')));
+    assert.ok(isRetryableError(new Error('Request timed out after 15000ms')));
+  });
+  it('retries fetch failures, timeouts and our own HTTP errors', () => {
+    assert.ok(isRetryableError(new Error('HTTP 502')));
+    assert.ok(isRetryableError(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } })));
+    assert.ok(isRetryableError(Object.assign(new Error('aborted'), { name: 'TimeoutError' })));
+  });
+  it('does not retry client errors or programming bugs', () => {
+    assert.ok(!isRetryableError(new Error('Status code 404')));
+    assert.ok(!isRetryableError(new Error('HTTP 403')));
+    assert.ok(!isRetryableError(new TypeError("Cannot read properties of undefined (reading 'map')")));
+  });
+});
+
+describe('stripHtml', () => {
+  it('decodes entities in a single pass', () => {
+    assert.strictEqual(stripHtml('<p>a &amp;lt; b</p>'), 'a &lt; b');
+  });
+  it('decodes numeric entities', () => {
+    assert.strictEqual(stripHtml('It&#8217;s &#x27;free&#x27;'), 'It’s \'free\'');
+  });
+  it('leaves unknown entities alone', () => {
+    assert.strictEqual(stripHtml('&bogus; &lt;b&gt;'), '&bogus; <b>');
   });
 });

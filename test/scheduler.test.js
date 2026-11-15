@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { parseHHMM, validateTimezone, inWindow, currentMode, nextDigestAt, quietWindowEnd } from '../src/scheduler.js';
+import { parseHHMM, validateTimezone, inWindow, currentMode, nextDigestAt, quietWindowEnd, previousDigestAt, quietWindowStart, isDigestDeferred } from '../src/scheduler.js';
 
 describe('parseHHMM', () => {
   it('parses valid times', () => {
@@ -126,5 +126,33 @@ describe('quietWindowEnd', () => {
       schedule: { mode: 'realtime', timezone: 'UTC', quietHours: [{ from: '22:00', to: '07:00' }] }
     };
     assert.strictEqual(quietWindowEnd(profile, Date.UTC(2026, 4, 1, 12)), null);
+  });
+});
+
+describe('deferred digests (digestAt inside quiet hours)', () => {
+  const profile = {
+    schedule: { timezone: 'UTC', mode: 'digest', quietHours: [{ from: '22:00', to: '07:00' }], digestAt: '06:00' },
+  };
+  const at = s => Date.parse(`2026-11-15T${s}:00Z`);
+
+  it('finds the previous digestAt and the quiet window start', () => {
+    assert.strictEqual(previousDigestAt(profile, at('06:30')), at('06:00'));
+    assert.strictEqual(quietWindowStart(profile, at('06:30')), Date.parse('2026-11-14T22:00:00Z'));
+    assert.strictEqual(quietWindowStart(profile, at('12:00')), null);
+  });
+
+  it('is deferred after digestAt passes inside the quiet window', () => {
+    assert.strictEqual(isDigestDeferred(profile, at('06:30')), true);
+    assert.strictEqual(isDigestDeferred(profile, at('06:00')), true);
+  });
+
+  it('is not deferred before digestAt or outside quiet hours', () => {
+    assert.strictEqual(isDigestDeferred(profile, at('05:59')), false);
+    assert.strictEqual(isDigestDeferred(profile, at('07:30')), false);
+    assert.strictEqual(isDigestDeferred({ schedule: { ...profile.schedule, digestAt: '21:00' } }, at('23:00')), false);
+  });
+
+  it('is never deferred for non-digest profiles', () => {
+    assert.strictEqual(isDigestDeferred({ schedule: { ...profile.schedule, mode: 'realtime' } }, at('06:30')), false);
   });
 });

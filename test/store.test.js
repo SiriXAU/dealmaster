@@ -141,3 +141,20 @@ describe('fuzzyHash', () => {
     assert.notStrictEqual(a, b);
   });
 });
+
+describe('saveSeenDeals pairing', () => {
+  it('round-trips hashes and fuzzies that share timestamps', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'seen-'));
+    try {
+      const hashes = new Map([['h1', 1], ['h2', 1], ['h3', 2]]);
+      const fuzzies = new Map([['f1', 1], ['f2', 2], ['f3', 2], ['f4', 3]]);
+      await saveSeenDeals(new Set(['a']), hashes, fuzzies, dir, 100);
+      const loaded = await loadSeenDeals(dir);
+      assert.deepStrictEqual([...loaded.hashes].sort(), [...hashes].sort());
+      assert.deepStrictEqual([...loaded.fuzzies].sort(), [...fuzzies].sort());
+      assert.deepStrictEqual(await fs.readdir(dir), ['seen-deals.json']);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});

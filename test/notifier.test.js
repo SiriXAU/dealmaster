@@ -88,3 +88,28 @@ describe('buildEmbed', () => {
     assert.ok(embed.thumbnail.url.startsWith('https://'));
   });
 });
+
+describe('per-destination results', () => {
+  it('reports one result per configured URL, keyed by the original URL', async () => {
+    const { sendDealNotification } = await import('../src/notifier.js');
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => ({
+      ok: String(url).includes('/webhooks/111/'),
+      status: String(url).includes('/webhooks/111/') ? 204 : 400,
+      headers: { get: () => null },
+      text: async () => 'bad webhook',
+    });
+    try {
+      const urls = ['discord://111/aaa', 'discord://222/bbb'];
+      const { ok, results } = await sendDealNotification(
+        { title: 'T', link: 'https://e.com', source: 'ozbargain', votes: 0 }, urls);
+      assert.strictEqual(ok, false);
+      assert.deepStrictEqual(results.map(r => [r.target, r.ok]), [
+        ['discord://111/aaa', true],
+        ['discord://222/bbb', false],
+      ]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});

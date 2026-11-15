@@ -135,3 +135,60 @@ describe('saveSettings + loadSettings', () => {
     }
   });
 });
+
+describe('settings validation', () => {
+  const base = { id: 'x', appriseUrls: ['discord://1/a'], categories: [], keywords: [], minVotes: 0 };
+
+  it('rejects an invalid timezone instead of silently using UTC', async () => {
+    const dir = await tmp();
+    try {
+      await assert.rejects(() => saveSettings(dir, {
+        profiles: [{ ...base, schedule: { timezone: 'Mars/Base' } }],
+      }), /timezone is invalid/);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects URLs starting with "-"', async () => {
+    const dir = await tmp();
+    try {
+      await assert.rejects(() => saveSettings(dir, {
+        profiles: [{ ...base, appriseUrls: ['--attach=/data/settings.json'] }],
+      }), /must not start with "-"/);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects non-boolean gaming sources', async () => {
+    const dir = await tmp();
+    try {
+      await assert.rejects(() => saveSettings(dir, {
+        profiles: [base], gamingSources: { gamerpower: 'yes' },
+      }), /must be a boolean/);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null (and does not throw) for a corrupt settings.json', async () => {
+    const dir = await tmp();
+    try {
+      await fs.writeFile(path.join(dir, 'settings.json'), '{ not json');
+      assert.strictEqual(await loadSettings(dir), null);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves no temp files behind after saving', async () => {
+    const dir = await tmp();
+    try {
+      await saveSettings(dir, { profiles: [base] });
+      assert.deepStrictEqual(await fs.readdir(dir), ['settings.json']);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});

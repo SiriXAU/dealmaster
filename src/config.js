@@ -40,7 +40,12 @@ export function loadConfig(savedSettings = null) {
     process.exit(1);
   }
 
-  const maxSeenDealsRaw = s.maxSeenDeals != null ? Number(s.maxSeenDeals) : parseInt(process.env.MAX_SEEN_DEALS ?? '500', 10);
+  const maxSeenDealsRaw = s.maxSeenDeals != null ? Number(s.maxSeenDeals) : Number(process.env.MAX_SEEN_DEALS ?? '500');
+  let maxSeenDeals = maxSeenDealsRaw;
+  if (!Number.isInteger(maxSeenDealsRaw) || maxSeenDealsRaw < 1) {
+    log.warn(`MAX_SEEN_DEALS must be a whole number >= 1 (got "${s.maxSeenDeals ?? process.env.MAX_SEEN_DEALS}") — using 500`);
+    maxSeenDeals = 500;
+  }
   const dataDir         = process.env.DATA_DIR ?? '/data';
 
   const gs = s.gamingSources ?? {};
@@ -60,8 +65,9 @@ export function loadConfig(savedSettings = null) {
     keywords:       head.keywords,
     minVotes:       head.minVotes,
     pollIntervalMs: pollIntervalSeconds * 1000,
-    maxSeenDeals:   isNaN(maxSeenDealsRaw) ? 500 : maxSeenDealsRaw,
+    maxSeenDeals,
     dataDir,
+    startupNotification: String(process.env.STARTUP_NOTIFICATION ?? 'true').toLowerCase() !== 'false',
     gamingSources,
   });
 }

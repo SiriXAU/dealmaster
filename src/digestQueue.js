@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { createLogger } from './logger.js';
+import { writeFileAtomic } from './fsUtil.js';
 
 const log = createLogger('digest');
 
@@ -31,9 +32,8 @@ export async function loadQueue(dataDir) {
 }
 
 export async function saveQueue(dataDir, queue) {
-  await fs.mkdir(dataDir, { recursive: true });
   const obj = Object.fromEntries(queue);
-  await fs.writeFile(path.join(dataDir, FILE), JSON.stringify(obj), 'utf-8');
+  await writeFileAtomic(path.join(dataDir, FILE), JSON.stringify(obj));
 }
 
 /**
